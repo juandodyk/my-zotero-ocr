@@ -3,8 +3,7 @@ var LosslessOCRCore = (() => {
 
 	const PRESERVATION_ARGS = [
 		"--output-type", "pdf",
-		"--optimize", "0",
-		"--fast-web-view", "0"
+		"--optimize", "0"
 	];
 
 	function normalizeLanguage(value) {
@@ -105,6 +104,13 @@ var LosslessOCRCore = (() => {
 
 	function countWords(text) {
 		return (String(text || "").trim().match(/\S+/g) || []).length;
+	}
+
+	function mapBatchProgress(itemIndex, itemCount, itemFraction, start = 5, end = 99) {
+		const count = Math.max(1, Number(itemCount) || 1);
+		const index = Math.min(count - 1, Math.max(0, Number(itemIndex) || 0));
+		const fraction = Math.min(1, Math.max(0, Number(itemFraction) || 0));
+		return start + (end - start) * (index + fraction) / count;
 	}
 
 	function parsePDFImages(text, pdfInfo) {
@@ -228,6 +234,7 @@ var LosslessOCRCore = (() => {
 		parsePDFInfo,
 		compareGeometry,
 		countWords,
+		mapBatchProgress,
 		parsePDFImages,
 		assessPreflight,
 		assessText,

@@ -24,7 +24,6 @@ ocrmypdf \
 	--mode strip \
 	--output-type pdf \
 	--optimize 0 \
-	--fast-web-view 0 \
 	"$input" \
 	"$stripped"
 
@@ -32,7 +31,6 @@ ocrmypdf \
 	--mode redo \
 	--output-type pdf \
 	--optimize 0 \
-	--fast-web-view 0 \
 	-l eng \
 	"$stripped" \
 	"$output"
@@ -64,7 +62,6 @@ ocrmypdf \
 	--mode strip \
 	--output-type pdf \
 	--optimize 0 \
-	--fast-web-view 0 \
 	"$work_dir/born-digital.pdf" \
 	"$work_dir/born-digital-stripped.pdf"
 born_pages="$(pdfinfo "$work_dir/born-digital-stripped.pdf" | awk '/^Pages:/ { print $2 }')"

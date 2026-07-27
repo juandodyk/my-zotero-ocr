@@ -31,6 +31,11 @@ If processing or a hard validation check fails, the source is not changed and
 the temporary work directory is retained. Soft text-quality warnings require
 confirmation before replacement.
 
+During processing, Zotero shows an in-window horizontal progress bar with the
+current stage and batch-aware percentage. The percentage is stage-weighted
+because OCRmyPDF does not expose reliable page-by-page progress through its
+captured subprocess output.
+
 ## Preservation recipe
 
 The processing arguments are intentionally fixed:
@@ -40,7 +45,6 @@ ocrmypdf \
   --mode strip \
   --output-type pdf \
   --optimize 0 \
-  --fast-web-view 0 \
   input.pdf \
   stripped.pdf
 
@@ -48,7 +52,6 @@ ocrmypdf \
   --mode redo \
   --output-type pdf \
   --optimize 0 \
-  --fast-web-view 0 \
   -l eng \
   stripped.pdf \
   output-ocr.pdf
@@ -58,9 +61,9 @@ There are deliberately no preferences for `force`, deskewing, rotation,
 background removal, cleanup of final images, PDF/A conversion, or lossy
 optimization.
 
-Note: in current OCRmyPDF releases, `--fast-web-view 0` requests
-linearization. It remains fixed here because it is part of the preservation
-recipe this extension implements.
+The extension leaves `--fast-web-view` at OCRmyPDF's default. This avoids
+forcing both stages to linearize while still allowing OCRmyPDF to linearize
+larger outputs when useful.
 
 ## Requirements
 
@@ -84,7 +87,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 
 ## Install
 
-Download `lossless-ocr-for-zotero-1.1.0.xpi` from the latest GitHub release.
+Download `lossless-ocr-for-zotero-1.2.0.xpi` from the latest GitHub release.
 In Zotero, open **Tools → Plugins**, choose **Install Plugin From File**, and
 select the XPI.
 

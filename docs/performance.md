@@ -23,7 +23,7 @@ All outputs:
 - produced pixel-identical Poppler renders.
 
 On this synthetic fixture, omitting or effectively disabling the flag was
-about 16-17% faster than forcing the threshold to zero. The extension still
-uses `--fast-web-view 0` because changing the preservation recipe was outside
-the scope of this benchmark. A representative set of real JSTOR PDFs should
-be tested before changing the production setting.
+about 16-17% faster than forcing the threshold to zero. Beginning with version
+1.2.0, the extension omits the flag and uses OCRmyPDF's default behavior. This
+retains automatic linearization for larger files without forcing both stages
+to rewrite the PDF structure.

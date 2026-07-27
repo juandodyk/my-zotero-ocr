@@ -7,19 +7,20 @@ assert.deepEqual(core.stageArgs("eng+fra"), {
 	strip: [
 		"--mode", "strip",
 		"--output-type", "pdf",
-		"--optimize", "0",
-		"--fast-web-view", "0"
+		"--optimize", "0"
 	],
 	redo: [
 		"--mode", "redo",
 		"--output-type", "pdf",
 		"--optimize", "0",
-		"--fast-web-view", "0",
 		"-l", "eng+fra"
 	]
 });
 
 assert.throws(() => core.normalizeLanguage("eng --force-ocr"), /Invalid OCR language/);
+assert.equal(core.mapBatchProgress(0, 2, 0), 5);
+assert.equal(core.mapBatchProgress(0, 2, 1), 52);
+assert.equal(core.mapBatchProgress(1, 2, 1), 99);
 
 const info = [
 	"Pages:           2",

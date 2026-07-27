@@ -6,33 +6,127 @@ function losslessOCRLog(message) {
 	Zotero.debug("Lossless OCR for Zotero: " + message);
 }
 
-function makeProgressWindow(message) {
+function makeProgressWindow(window, message) {
+	const id = "lossless-ocr-for-zotero-progress";
+	const xhtml = "http://www.w3.org/1999/xhtml";
+	let controller;
+
 	try {
-		const progressWindow = new Zotero.ProgressWindow({ closeOnClick: false });
-		progressWindow.changeHeadline("Lossless OCR");
-		progressWindow.show();
-		const itemProgress = new progressWindow.ItemProgress(
-			"chrome://zotero/skin/attachment-pdf.svg",
-			message
-		);
-		return {
-			update(text) {
-				if (this.lastText === text) return;
-				this.lastText = text;
-				itemProgress.setText(text);
+		const doc = window.document;
+		doc.getElementById(id)?.remove();
+
+		const card = doc.createElementNS(xhtml, "div");
+		card.id = id;
+		card.setAttribute("role", "status");
+		card.setAttribute("aria-live", "polite");
+		card.style.cssText = [
+			"position: fixed",
+			"right: 24px",
+			"bottom: 24px",
+			"z-index: 2147483647",
+			"width: 360px",
+			"max-width: calc(100vw - 48px)",
+			"box-sizing: border-box",
+			"padding: 14px 16px",
+			"border: 1px solid color-mix(in srgb, CanvasText 18%, transparent)",
+			"border-radius: 10px",
+			"background: Canvas",
+			"color: CanvasText",
+			"box-shadow: 0 8px 28px rgba(0, 0, 0, 0.24)",
+			"font: menu",
+			"pointer-events: none",
+			"color-scheme: light dark"
+		].join(";");
+
+		const headline = doc.createElementNS(xhtml, "div");
+		headline.textContent = "Lossless OCR";
+		headline.style.cssText = "font-size: 14px; font-weight: 600; margin-bottom: 10px";
+
+		const bar = doc.createElementNS(xhtml, "progress");
+		bar.max = 100;
+		bar.value = 0;
+		bar.setAttribute("aria-label", "Lossless OCR progress");
+		bar.style.cssText = [
+			"display: block",
+			"width: 100%",
+			"height: 10px",
+			"margin: 0 0 9px",
+			"accent-color: AccentColor"
+		].join(";");
+
+		const details = doc.createElementNS(xhtml, "div");
+		details.style.cssText = "display: flex; align-items: center; gap: 12px; font-size: 12px";
+
+		const status = doc.createElementNS(xhtml, "span");
+		status.textContent = message;
+		status.style.cssText = [
+			"min-width: 0",
+			"flex: 1",
+			"overflow: hidden",
+			"text-overflow: ellipsis",
+			"white-space: nowrap"
+		].join(";");
+
+		const percentage = doc.createElementNS(xhtml, "span");
+		percentage.textContent = "0%";
+		percentage.style.cssText = "flex: none; font-variant-numeric: tabular-nums; opacity: 0.72";
+
+		details.append(status, percentage);
+		card.append(headline, bar, details);
+		doc.documentElement.appendChild(card);
+
+		controller = {
+			lastText: message,
+			lastPercent: 0,
+			update(text, percent) {
+				if (text && text !== this.lastText) {
+					this.lastText = text;
+					status.textContent = text;
+				}
+				if (Number.isFinite(percent)) {
+					const next = Math.min(100, Math.max(this.lastPercent, percent));
+					this.lastPercent = next;
+					bar.value = next;
+					percentage.textContent = Math.round(next) + "%";
+				}
 			},
 			finish(text) {
-				itemProgress.setText(text);
-				itemProgress.setProgress(100);
+				this.update(text, 100);
 			},
 			close() {
-				progressWindow.close();
+				card.remove();
+			},
+			scope(itemIndex, itemCount) {
+				return {
+					update(text, itemFraction) {
+						const percent = Number.isFinite(itemFraction)
+							? LosslessOCRCore.mapBatchProgress(
+								itemIndex,
+								itemCount,
+								itemFraction
+							)
+							: undefined;
+						controller.update(text, percent);
+					},
+					finish(text) {
+						this.update(text, 1);
+					}
+				};
 			}
 		};
+		return controller;
 	}
 	catch (error) {
-		losslessOCRLog("Could not create progress window: " + error);
-		return { update() {}, finish() {}, close() {} };
+		losslessOCRLog("Could not create progress bar: " + (error.stack || error));
+		const dummy = {
+			update() {},
+			finish() {},
+			close() {},
+			scope() {
+				return dummy;
+			}
+		};
+		return dummy;
 	}
 }
 
@@ -75,6 +169,7 @@ LosslessOCRForZotero = {
 		for (const id of this.addedElementIDs) {
 			doc.getElementById(id)?.remove();
 		}
+		doc.getElementById("lossless-ocr-for-zotero-progress")?.remove();
 		doc.querySelector('[href="lossless-ocr-for-zotero.ftl"]')?.remove();
 	},
 
@@ -86,32 +181,44 @@ LosslessOCRForZotero = {
 	},
 
 	async run(window) {
-		const progress = makeProgressWindow("Checking tools");
+		const progress = makeProgressWindow(window, "Checking tools");
 		const failures = [];
 		let completed = 0;
 		let skipped = 0;
 
 		try {
+			progress.update("Checking tools", 1);
 			const tools = await this.findRequiredTools();
+			progress.update("Reading selection", 3);
 			const selected = Zotero.getActiveZoteroPane().getSelectedItems();
 			const jobs = await this.resolveJobs(selected, window);
 			if (!jobs.length) return;
+			progress.update("Starting OCR", 5);
 
-			for (const job of jobs) {
+			for (let index = 0; index < jobs.length; index++) {
+				const job = jobs[index];
+				const jobProgress = progress.scope(index, jobs.length);
 				if (this.processingItemIDs.has(job.pdfItem.id)) {
 					failures.push(job.pdfItem.getDisplayTitle() + ": already being processed");
+					jobProgress.finish("Skipped PDF already being processed");
 					continue;
 				}
 
 				this.processingItemIDs.add(job.pdfItem.id);
 				try {
-					progress.update("Preparing " + job.pdfItem.getDisplayTitle());
-					const result = await this.processPDF({ ...job, tools, progress, window });
+					jobProgress.update("Preparing " + job.pdfItem.getDisplayTitle(), 0.02);
+					const result = await this.processPDF({
+						...job,
+						tools,
+						progress: jobProgress,
+						window
+					});
 					if (result.status === "skipped") skipped++;
 					else completed++;
 				}
 				catch (error) {
 					losslessOCRLog(error.stack || error);
+					jobProgress.finish("OCR failed for " + job.pdfItem.getDisplayTitle());
 					let message = job.pdfItem.getDisplayTitle() + ": " + error.message;
 					if (error.workDir) {
 						message += "\nWork files kept at: " + error.workDir;
@@ -271,7 +378,7 @@ LosslessOCRForZotero = {
 		try {
 			const args = LosslessOCRCore.stageArgs(language);
 
-			progress.update("Stripping old invisible OCR");
+			progress.update("Stripping old invisible OCR", 0.05);
 			await this.runProcess({
 				command: tools.ocrmypdf,
 				arguments: [...args.strip, sourcePath, strippedPath],
@@ -279,7 +386,7 @@ LosslessOCRForZotero = {
 				progress
 			});
 
-			progress.update("Checking whether OCR is needed");
+			progress.update("Checking whether OCR is needed", 0.20);
 			const preflight = await this.runPreflight({
 				sourcePath,
 				strippedPath,
@@ -288,7 +395,7 @@ LosslessOCRForZotero = {
 				workDir
 			});
 			if (preflight.shouldSkip) {
-				progress.update("Skipped born-digital PDF");
+				progress.finish("Skipped born-digital PDF");
 				losslessOCRLog(
 					"Skipped " + sourcePath + ": " + preflight.reason
 					+ " (" + preflight.words + " words)"
@@ -297,15 +404,16 @@ LosslessOCRForZotero = {
 				return { status: "skipped", preflight };
 			}
 
-			progress.update("Running replacement OCR");
+			progress.update("Running replacement OCR", 0.30);
 			await this.runProcess({
 				command: tools.ocrmypdf,
 				arguments: [...args.redo, strippedPath, outputPath],
 				workDir,
 				progress
 			});
+			progress.update("OCR finished", 0.72);
 
-			progress.update("Validating OCR output");
+			progress.update("Validating OCR output", 0.75);
 			const validation = await this.validateOutput({
 				sourcePath,
 				outputPath,
@@ -314,6 +422,7 @@ LosslessOCRForZotero = {
 				workDir,
 				preflight
 			});
+			progress.update("Validation passed", 0.86);
 
 			if (validation.warnings.length) {
 				const proceed = window.confirm(
@@ -326,7 +435,7 @@ LosslessOCRForZotero = {
 				}
 			}
 			if (this.getBoolPref("keepBackup", true)) {
-				progress.update("Saving original PDF backup");
+				progress.update("Saving original PDF backup", 0.89);
 				await Zotero.Attachments.importFromFile({
 					file: sourcePath,
 					libraryID: parentItem.libraryID,
@@ -337,11 +446,12 @@ LosslessOCRForZotero = {
 				});
 			}
 
-			progress.update("Replacing attachment");
+			progress.update("Replacing attachment", 0.94);
 			await IOUtils.copy(outputPath, replacementPath);
 			await IOUtils.move(replacementPath, sourcePath, { noOverwrite: false });
 			await this.refreshAndReindex(pdfItem, progress);
 			completed = true;
+			progress.finish("Lossless OCR complete");
 
 			losslessOCRLog(
 				"Completed " + sourcePath + ": " + validation.outputWords
@@ -526,7 +636,7 @@ LosslessOCRForZotero = {
 
 		if (!Zotero.Fulltext?.indexItems) return;
 		try {
-			progress.update("Updating Zotero full-text index");
+			progress.update("Updating Zotero full-text index", 0.97);
 			await Zotero.Fulltext.indexItems([pdfItem.id], {
 				complete: true,
 				ignoreErrors: true
