@@ -1,0 +1,19 @@
+{
+  "addons": {
+    "ocrmypdf-for-zotero@juandodyk.local": {
+      "updates": [
+        {
+          "version": "1.0.0",
+          "update_link": "https://github.com/juandodyk/my-zotero-ocr/releases/download/v1.0.0/lossless-ocr-for-zotero-1.0.0.xpi",
+          "update_hash": "sha256:79f435420c703634ea84ee8504411016e5b79a9a66a593f63d65b20b381364e9",
+          "applications": {
+            "zotero": {
+              "strict_min_version": "7.0.0",
+              "strict_max_version": "9.0.*"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

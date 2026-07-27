@@ -1,0 +1,21 @@
+<vbox>
+	<groupbox>
+		<label><html:h2>Lossless OCR</html:h2></label>
+		<label value="Full path to ocrmypdf (leave empty to search common locations)"/>
+		<html:input id="lossless-ocr-for-zotero-path" type="text"
+			preference="extensions.zotero.ocrmypdf.path" style="width: 100%;"/>
+		<hbox align="center">
+			<label value="OCR language(s), for example eng or eng+fra+deu"/>
+			<html:input id="lossless-ocr-for-zotero-language" type="text"
+				preference="extensions.zotero.ocrmypdf.language" style="width: 10em;"/>
+		</hbox>
+		<checkbox id="lossless-ocr-for-zotero-keep-backup"
+			preference="extensions.zotero.ocrmypdf.keepBackup"
+			label="Keep the pre-OCR PDF as a sibling attachment"/>
+		<description>
+			The preservation settings are fixed: strip the old invisible layer, then redo OCR
+			with PDF output, optimization disabled, and no image cleanup, deskewing, rotation,
+			or forced rasterization.
+		</description>
+	</groupbox>
+</vbox>

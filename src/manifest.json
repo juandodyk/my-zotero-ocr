@@ -1,0 +1,16 @@
+{
+  "manifest_version": 2,
+  "name": "Lossless OCR for Zotero",
+  "version": "1.0.0",
+  "description": "Replace stale OCR in scanned Zotero PDFs without re-rendering their visible pages.",
+  "author": "Juan Dodyk",
+  "homepage_url": "https://github.com/juandodyk/my-zotero-ocr",
+  "applications": {
+    "zotero": {
+      "id": "ocrmypdf-for-zotero@juandodyk.local",
+      "update_url": "https://raw.githubusercontent.com/juandodyk/my-zotero-ocr/main/updates.json",
+      "strict_min_version": "7.0.0",
+      "strict_max_version": "9.0.*"
+    }
+  }
+}

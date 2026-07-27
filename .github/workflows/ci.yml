@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install PDF and OCR dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ghostscript poppler-utils qpdf tesseract-ocr
+          python3 -m pip install --user ocrmypdf pillow reportlab
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Test
+        run: npm test
+
+      - name: Build XPI
+        run: npm run build
