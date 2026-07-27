@@ -21,6 +21,16 @@ assert.deepEqual(core.stageArgs("eng+fra", "sandwich"), {
 assert.throws(() => core.normalizeLanguage("eng --force-ocr"), /Invalid OCR language/);
 assert.equal(core.normalizePDFRenderer(" FPDF2 "), "fpdf2");
 assert.throws(() => core.normalizePDFRenderer("hocr"), /Invalid PDF renderer/);
+assert.equal(core.describePDFRenderer("word-box"), "word boxes");
+assert.doesNotThrow(() => core.validatePDFRenderer("word-box", {
+	creator: "OCRmyPDF / Lossless OCR word-box renderer + Tesseract OCR"
+}));
+assert.throws(() => core.validatePDFRenderer("word-box", {
+	creator: "OCRmyPDF / Tesseract OCR + PDF"
+}), /different text layer/);
+assert.doesNotThrow(() => core.validatePDFRenderer("sandwich", {
+	creator: "OCRmyPDF / Tesseract OCR + PDF"
+}));
 assert.deepEqual(core.stageArgs("eng", "word-box").redo, [
 	"--mode", "redo",
 	"--output-type", "pdf",
@@ -61,6 +71,7 @@ assert.deepEqual(core.describeOCRProgress({
 assert.equal(core.parseOCRProgressEvent("ordinary OCRmyPDF output"), null);
 
 const info = [
+	"Creator:         OCRmyPDF / Lossless OCR word-box renderer",
 	"Pages:           2",
 	"Page    1 size:  612 x 792 pts (letter)",
 	"Page    1 rot:   0",
@@ -69,6 +80,7 @@ const info = [
 ].join("\n");
 const parsed = core.parsePDFInfo(info);
 assert.equal(parsed.pages, 2);
+assert.equal(parsed.creator, "OCRmyPDF / Lossless OCR word-box renderer");
 assert.deepEqual(parsed.geometry[1], {
 	page: 2,
 	width: 792,

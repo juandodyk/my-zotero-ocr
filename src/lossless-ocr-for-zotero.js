@@ -380,6 +380,8 @@ LosslessOCRForZotero = {
 		const pdfRenderer = LosslessOCRCore.normalizePDFRenderer(
 			this.getStringPref("pdfRenderer", "fpdf2")
 		);
+		const rendererLabel = LosslessOCRCore.describePDFRenderer(pdfRenderer);
+		losslessOCRLog("Selected PDF renderer: " + pdfRenderer);
 		const workDir = PathUtils.join(
 			PathUtils.tempDir,
 			"lossless-ocr-zotero-" + Date.now() + "-" + Math.random().toString(36).slice(2)
@@ -438,7 +440,10 @@ LosslessOCRForZotero = {
 				return { status: "skipped", preflight };
 			}
 
-			progress.update("Running replacement OCR", 0.30);
+			progress.update(
+				"Running replacement OCR (" + rendererLabel + ")",
+				0.30
+			);
 			await this.runProcess({
 				command: tools.ocrmypdf,
 				arguments: [
@@ -463,7 +468,8 @@ LosslessOCRForZotero = {
 				outputTextPath,
 				tools,
 				workDir,
-				preflight
+				preflight,
+				pdfRenderer
 			});
 			progress.update("Validation passed", 0.86);
 
@@ -525,7 +531,8 @@ LosslessOCRForZotero = {
 		outputTextPath,
 		tools,
 		workDir,
-		preflight
+		preflight,
+		pdfRenderer
 	}) {
 		const [, outputInfo, outputText, inputStat, outputStat] = await this.awaitAll([
 			this.runProcess({
@@ -539,6 +546,7 @@ LosslessOCRForZotero = {
 			IOUtils.stat(outputPath)
 		]);
 		LosslessOCRCore.compareGeometry(preflight.sourceInfo, outputInfo);
+		LosslessOCRCore.validatePDFRenderer(pdfRenderer, outputInfo);
 
 		const textAssessment = LosslessOCRCore.assessText({
 			pages: outputInfo.pages,

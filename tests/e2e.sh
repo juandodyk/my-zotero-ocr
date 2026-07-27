@@ -95,6 +95,7 @@ ocrmypdf \
 	"$stripped" \
 	"$word_box_output"
 qpdf --check "$word_box_output"
+pdfinfo "$word_box_output" | grep -F "Lossless OCR word-box renderer"
 
 cp "$word_box_output" "$repeat_strip_input"
 ocrmypdf \

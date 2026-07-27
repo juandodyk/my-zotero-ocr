@@ -12,7 +12,9 @@
 		<hbox align="center">
 			<label value="OCR text-layer renderer"/>
 			<menulist id="lossless-ocr-for-zotero-pdf-renderer"
-				preference="extensions.zotero.ocrmypdf.pdfRenderer">
+				native="true"
+				preference="extensions.zotero.ocrmypdf.pdfRenderer"
+				oncommand="Zotero.Prefs.set('ocrmypdf.pdfRenderer', this.value);">
 				<menupopup>
 					<menuitem label="fpdf2 (recommended; multilingual and RTL)" value="fpdf2"/>
 					<menuitem label="sandwich (often tighter Latin-text selection)" value="sandwich"/>

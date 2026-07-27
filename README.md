@@ -35,7 +35,8 @@ confirmation before replacement.
 
 During processing, Zotero shows an in-window horizontal progress bar with the
 current stage and batch-aware percentage. It advances after each completed OCR
-page and displays the completed and total page counts.
+page and displays the completed and total page counts. The OCR stage also names
+the renderer actually selected, such as `word boxes`.
 
 Running the extension again is safe: it removes the existing removable
 invisible layers before creating one fresh OCR layer. Visible text such as
@@ -90,7 +91,9 @@ Choose the renderer in **Zotero Settings → Lossless OCR**:
 `fpdf2` and `sandwich` are OCRmyPDF's built-in renderers. The word-box renderer
 is implemented by the extension's bundled OCRmyPDF plugin. It changes only the
 invisible text positioning; visible page content still comes untouched from
-the stripped source PDF.
+the stripped source PDF. Before replacing an attachment, the extension verifies
+that OCRmyPDF stamped word-box output with the expected renderer identity. A
+silent fallback to `sandwich` is treated as a validation failure.
 
 ## Requirements
 
@@ -114,7 +117,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 
 ## Install
 
-Download `lossless-ocr-for-zotero-1.5.0.xpi` from the latest GitHub release.
+Download `lossless-ocr-for-zotero-1.5.1.xpi` from the latest GitHub release.
 In Zotero, open **Tools → Plugins**, choose **Install Plugin From File**, and
 select the XPI.
 

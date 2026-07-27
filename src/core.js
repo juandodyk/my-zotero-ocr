@@ -31,6 +31,31 @@ var LosslessOCRCore = (() => {
 		return renderer;
 	}
 
+	function describePDFRenderer(renderer) {
+		switch (normalizePDFRenderer(renderer)) {
+			case "word-box":
+				return "word boxes";
+			case "sandwich":
+				return "sandwich";
+			default:
+				return "fpdf2";
+		}
+	}
+
+	function validatePDFRenderer(renderer, pdfInfo) {
+		const normalizedRenderer = normalizePDFRenderer(renderer);
+		if (normalizedRenderer !== "word-box") return;
+
+		if (!String(pdfInfo.creator || "").includes(
+			"Lossless OCR word-box renderer"
+		)) {
+			throw new Error(
+				"The word-box renderer was requested, but OCRmyPDF produced "
+				+ "a different text layer. The source PDF has not been replaced."
+			);
+		}
+	}
+
 	function stageArgs(language, renderer = "fpdf2") {
 		const normalizedRenderer = normalizePDFRenderer(renderer);
 		return {
@@ -95,7 +120,12 @@ var LosslessOCRCore = (() => {
 			});
 		}
 
-		return { pages, geometry };
+		const creatorMatch = text.match(/^Creator:\s+(.+?)\s*$/m);
+		return {
+			pages,
+			geometry,
+			creator: creatorMatch ? creatorMatch[1] : ""
+		};
 	}
 
 	function compareGeometry(input, output, tolerance = 0.01) {
@@ -306,6 +336,8 @@ var LosslessOCRCore = (() => {
 		PRESERVATION_ARGS,
 		normalizeLanguage,
 		normalizePDFRenderer,
+		describePDFRenderer,
+		validatePDFRenderer,
 		stageArgs,
 		parsePDFInfo,
 		compareGeometry,

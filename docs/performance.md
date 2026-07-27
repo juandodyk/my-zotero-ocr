@@ -58,6 +58,20 @@ exactly one OCR Form per page. Both runs extracted 13,089 words. The first
 output was 2,496,526 bytes versus 2,531,067 bytes for the source, and sampled
 pages were pixel-identical across the source and both outputs.
 
+### Zotero/PDF.js selection validation
+
+Version 1.5.1 adds an activation check after a preference-selection failure
+silently produced `sandwich` output while `word boxes` appeared selected.
+Renderer selection is now saved immediately, shown in the progress message,
+and verified from the output PDF's creator stamp before replacement.
+
+The actual word-box output was tested on page 6 of Dewatripont and Tirole
+(1994) with Zotero's bundled PDF.js 5.4.0 and Firefox 152. A browser range
+selection spanning prose, an assumption, displayed equations, and another
+paragraph produced separate hOCR-aligned word rectangles. The same test also
+confirmed that changing the page-level coordinate reflection was incorrect;
+PDF.js already accounts for the PDF-to-screen coordinate conversion.
+
 ### Other free renderer tested
 
 [ExactImage `hocr2pdf`](https://exactcode.com/opensource/exactimage/) 1.2.1 was
