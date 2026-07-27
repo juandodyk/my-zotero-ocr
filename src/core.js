@@ -19,21 +19,30 @@ var LosslessOCRCore = (() => {
 
 	function normalizePDFRenderer(value) {
 		const renderer = String(value || "fpdf2").trim().toLowerCase();
-		if (renderer !== "fpdf2" && renderer !== "sandwich") {
+		if (
+			renderer !== "fpdf2"
+			&& renderer !== "sandwich"
+			&& renderer !== "word-box"
+		) {
 			throw new Error(
-				"Invalid PDF renderer. Choose fpdf2 or sandwich."
+				"Invalid PDF renderer. Choose fpdf2, sandwich, or word-box."
 			);
 		}
 		return renderer;
 	}
 
 	function stageArgs(language, renderer = "fpdf2") {
+		const normalizedRenderer = normalizePDFRenderer(renderer);
 		return {
 			strip: ["--mode", "strip", ...PRESERVATION_ARGS],
 			redo: [
 				"--mode", "redo",
 				...PRESERVATION_ARGS,
-				"--pdf-renderer", normalizePDFRenderer(renderer),
+				"--pdf-renderer",
+				normalizedRenderer === "word-box" ? "sandwich" : normalizedRenderer,
+				...(normalizedRenderer === "word-box"
+					? ["--lossless-word-box-renderer"]
+					: []),
 				"-l", normalizeLanguage(language)
 			]
 		};

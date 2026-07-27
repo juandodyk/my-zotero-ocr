@@ -21,6 +21,14 @@ assert.deepEqual(core.stageArgs("eng+fra", "sandwich"), {
 assert.throws(() => core.normalizeLanguage("eng --force-ocr"), /Invalid OCR language/);
 assert.equal(core.normalizePDFRenderer(" FPDF2 "), "fpdf2");
 assert.throws(() => core.normalizePDFRenderer("hocr"), /Invalid PDF renderer/);
+assert.deepEqual(core.stageArgs("eng", "word-box").redo, [
+	"--mode", "redo",
+	"--output-type", "pdf",
+	"--optimize", "0",
+	"--pdf-renderer", "sandwich",
+	"--lossless-word-box-renderer",
+	"-l", "eng"
+]);
 assert.equal(core.mapBatchProgress(0, 2, 0), 5);
 assert.equal(core.mapBatchProgress(0, 2, 1), 52);
 assert.equal(core.mapBatchProgress(1, 2, 1), 99);
