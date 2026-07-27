@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict");
 const core = require("../src/core.js");
 
-assert.deepEqual(core.stageArgs("eng+fra"), {
+assert.deepEqual(core.stageArgs("eng+fra", "sandwich"), {
 	strip: [
 		"--mode", "strip",
 		"--output-type", "pdf",
@@ -13,11 +13,14 @@ assert.deepEqual(core.stageArgs("eng+fra"), {
 		"--mode", "redo",
 		"--output-type", "pdf",
 		"--optimize", "0",
+		"--pdf-renderer", "sandwich",
 		"-l", "eng+fra"
 	]
 });
 
 assert.throws(() => core.normalizeLanguage("eng --force-ocr"), /Invalid OCR language/);
+assert.equal(core.normalizePDFRenderer(" FPDF2 "), "fpdf2");
+assert.throws(() => core.normalizePDFRenderer("hocr"), /Invalid PDF renderer/);
 assert.equal(core.mapBatchProgress(0, 2, 0), 5);
 assert.equal(core.mapBatchProgress(0, 2, 1), 52);
 assert.equal(core.mapBatchProgress(1, 2, 1), 99);

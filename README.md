@@ -13,11 +13,13 @@ a download footer. The command appears in Zotero's item context menu as
 For the first eligible PDF under each selected bibliographic item, or for each
 directly selected PDF attachment, the extension:
 
-1. Copies nothing over the source yet.
-2. Strips invisible OCR without rasterizing the PDF.
+1. Makes a byte-for-byte temporary copy; the source is not changed yet.
+2. Recursively removes conventional invisible text and prior OCRmyPDF
+   `/OCR-*` Form layers from that copy, then runs OCRmyPDF's `strip` mode.
 3. Skips the expensive OCR stage when substantial born-digital text remains
    and no page-sized scanned images are present.
-4. Runs replacement OCR on scanned, mixed, or ambiguous PDFs.
+4. Runs replacement OCR with the selected text-layer renderer on scanned,
+   mixed, or ambiguous PDFs.
 5. Validates PDF syntax, page count, page dimensions, rotations, extracted
    text, and file-size growth.
 6. Optionally imports the unchanged source directly as a sibling backup.
@@ -32,9 +34,12 @@ the temporary work directory is retained. Soft text-quality warnings require
 confirmation before replacement.
 
 During processing, Zotero shows an in-window horizontal progress bar with the
-current stage and batch-aware percentage. With OCRmyPDF 17 or newer, the bar
-advances after each completed OCR page and displays the completed and total
-page counts. Older OCRmyPDF releases retain stage-weighted progress.
+current stage and batch-aware percentage. It advances after each completed OCR
+page and displays the completed and total page counts.
+
+Running the extension again is safe: it removes the existing removable
+invisible layers before creating one fresh OCR layer. Visible text such as
+download footers is preserved.
 
 ## Preservation recipe
 
@@ -52,6 +57,7 @@ ocrmypdf \
   --mode redo \
   --output-type pdf \
   --optimize 0 \
+  --pdf-renderer fpdf2 \
   -l eng \
   stripped.pdf \
   output-ocr.pdf
@@ -65,10 +71,26 @@ The extension leaves `--fast-web-view` at OCRmyPDF's default. This avoids
 forcing both stages to linearize while still allowing OCRmyPDF to linearize
 larger outputs when useful.
 
+## Text-layer renderer
+
+Choose the renderer in **Zotero Settings → Lossless OCR**:
+
+- **fpdf2** is OCRmyPDF's default and recommended renderer. It has the best
+  multilingual, right-to-left, and complex-script support.
+- **sandwich** uses Tesseract's text-only PDF layer. On some Latin-script scans
+  its selection boxes fit the printed lines more tightly, but OCRmyPDF
+  documents word-selection issues in PDF.js and macOS Preview and no
+  right-to-left support.
+
+`sandwich` is the only distinct built-in alternative to `fpdf2` in current
+OCRmyPDF. The deprecated `hocr` and `hocrdebug` names are aliases that redirect
+to `fpdf2`; replacing the OCR engine through a third-party plugin is possible
+but is a different, substantially larger customization.
+
 ## Requirements
 
 - Zotero 7, 8, or 9
-- [OCRmyPDF](https://ocrmypdf.readthedocs.io/) with Tesseract
+- [OCRmyPDF 17.6 or newer](https://ocrmypdf.readthedocs.io/) with Tesseract
 - `qpdf`, `pdfinfo`, `pdftotext`, and `pdfimages` for preflight detection and
   pre-replacement validation
 
@@ -87,7 +109,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 
 ## Install
 
-Download `lossless-ocr-for-zotero-1.3.0.xpi` from the latest GitHub release.
+Download `lossless-ocr-for-zotero-1.4.0.xpi` from the latest GitHub release.
 In Zotero, open **Tools → Plugins**, choose **Install Plugin From File**, and
 select the XPI.
 
@@ -102,9 +124,9 @@ npm test
 ```
 
 The end-to-end test creates a scanned fixture containing both visible footer
-text and stale invisible text, runs the exact two-stage recipe, checks PDF
-metadata and extracted text, and requires pixel-identical Poppler renders
-before and after OCR.
+text and stale invisible text, exercises both renderers and a repeated OCR run,
+checks that layers do not accumulate, validates PDF metadata and extracted
+text, and requires pixel-identical Poppler renders before and after OCR.
 
 The built XPI is written to `build/`.
 
@@ -117,6 +139,11 @@ The built XPI is written to `build/`.
   choose another.
 - Backup attachments are ignored when resolving PDFs for later runs.
 - Replacing a linked attachment modifies the linked file at its existing path.
+- The recursive cleanup removes conventional PDF text with render mode 3 and
+  OCRmyPDF `/OCR-*` Form layers. It intentionally does not guess at unusual
+  constructs such as visible text hidden behind an image, clipping-only text,
+  transparency tricks, or optional-content layers, because removing those
+  automatically could damage genuine page content.
 
 ## License
 

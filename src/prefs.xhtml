@@ -9,13 +9,23 @@
 			<html:input id="lossless-ocr-for-zotero-language" type="text"
 				preference="extensions.zotero.ocrmypdf.language" style="width: 10em;"/>
 		</hbox>
+		<hbox align="center">
+			<label value="OCR text-layer renderer"/>
+			<menulist id="lossless-ocr-for-zotero-pdf-renderer"
+				preference="extensions.zotero.ocrmypdf.pdfRenderer">
+				<menupopup>
+					<menuitem label="fpdf2 (recommended; multilingual and RTL)" value="fpdf2"/>
+					<menuitem label="sandwich (often tighter Latin-text selection)" value="sandwich"/>
+				</menupopup>
+			</menulist>
+		</hbox>
 		<checkbox id="lossless-ocr-for-zotero-keep-backup"
 			preference="extensions.zotero.ocrmypdf.keepBackup"
 			label="Keep the pre-OCR PDF as a sibling attachment"/>
 		<description>
-			The preservation settings are fixed: strip the old invisible layer, then redo OCR
-			with PDF output, optimization disabled, and no image cleanup, deskewing, rotation,
-			or forced rasterization.
+			Each run removes removable invisible text, including prior OCRmyPDF layers, then
+			creates one new layer with the selected renderer. PDF output and lossless
+			preservation settings remain fixed.
 		</description>
 	</groupbox>
 </vbox>

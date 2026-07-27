@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+export PYTHONDONTWRITEBYTECODE=1
 
 for command in ocrmypdf qpdf pdfinfo pdftotext pdfimages pdftoppm python3; do
 	if ! command -v "$command" >/dev/null 2>&1; then
@@ -14,25 +15,37 @@ mkdir -p "$work_dir"
 trap 'status=$?; if [ "$status" -eq 0 ]; then rm -rf "$work_dir"; else printf "test files kept at %s\n" "$work_dir" >&2; fi' EXIT
 
 input="$work_dir/input.pdf"
+strip_input="$work_dir/strip-input.pdf"
 stripped="$work_dir/stripped.pdf"
 output="$work_dir/output.pdf"
+sandwich_output="$work_dir/output-sandwich.pdf"
+repeat_strip_input="$work_dir/repeat-strip-input.pdf"
+repeat_stripped="$work_dir/repeat-stripped.pdf"
+repeat_output="$work_dir/repeat-output.pdf"
 progress_log="$work_dir/progress.log"
+cleanup_log="$work_dir/cleanup.log"
+ocrmypdf_python="$(sed -n '1s/^#!//p' "$(command -v ocrmypdf)")"
 
 python3 tests/make_fixture.py "$input"
 python3 tests/make_born_digital_fixture.py "$work_dir/born-digital.pdf"
 
+cp "$input" "$strip_input"
 ocrmypdf \
+	--plugin src/ocrmypdf_progress_plugin.py \
+	--lossless-clean-invisible-layers \
 	--mode strip \
 	--output-type pdf \
 	--optimize 0 \
-	"$input" \
-	"$stripped"
+	"$strip_input" \
+	"$stripped" \
+	2>"$cleanup_log"
 
 if ! ocrmypdf \
 	--plugin src/ocrmypdf_progress_plugin.py \
 	--mode redo \
 	--output-type pdf \
 	--optimize 0 \
+	--pdf-renderer fpdf2 \
 	-l eng \
 	"$stripped" \
 	"$output" \
@@ -60,6 +73,43 @@ NODE
 
 qpdf --check "$output"
 
+ocrmypdf \
+	--plugin src/ocrmypdf_progress_plugin.py \
+	--mode redo \
+	--output-type pdf \
+	--optimize 0 \
+	--pdf-renderer sandwich \
+	-l eng \
+	"$stripped" \
+	"$sandwich_output"
+qpdf --check "$sandwich_output"
+
+cp "$output" "$repeat_strip_input"
+ocrmypdf \
+	--plugin src/ocrmypdf_progress_plugin.py \
+	--lossless-clean-invisible-layers \
+	--mode strip \
+	--output-type pdf \
+	--optimize 0 \
+	"$repeat_strip_input" \
+	"$repeat_stripped" \
+	2>"$work_dir/repeat-cleanup.log"
+grep -Eq '"removedOCRFormInvocations":[1-9][0-9]*' "$work_dir/repeat-cleanup.log"
+ocrmypdf \
+	--plugin src/ocrmypdf_progress_plugin.py \
+	--mode redo \
+	--output-type pdf \
+	--optimize 0 \
+	--pdf-renderer fpdf2 \
+	-l eng \
+	"$repeat_stripped" \
+	"$repeat_output"
+qpdf --check "$repeat_output"
+"$ocrmypdf_python" tests/check_ocr_layers.py \
+	"$output" \
+	"$sandwich_output" \
+	"$repeat_output"
+
 input_pages="$(pdfinfo "$input" | awk '/^Pages:/ { print $2 }')"
 output_pages="$(pdfinfo "$output" | awk '/^Pages:/ { print $2 }')"
 test "$input_pages" = "$output_pages"
@@ -75,17 +125,26 @@ NODE
 
 pdftotext "$stripped" "$work_dir/stripped.txt"
 pdftotext "$output" "$work_dir/output.txt"
+pdftotext "$sandwich_output" "$work_dir/sandwich-output.txt"
+pdftotext "$repeat_output" "$work_dir/repeat-output.txt"
 pdfimages -list "$stripped" > "$work_dir/stripped-images.txt"
 stripped_words="$(wc -w < "$work_dir/stripped.txt" | tr -d ' ')"
 output_words="$(wc -w < "$work_dir/output.txt" | tr -d ' ')"
+sandwich_words="$(wc -w < "$work_dir/sandwich-output.txt" | tr -d ' ')"
+repeat_words="$(wc -w < "$work_dir/repeat-output.txt" | tr -d ' ')"
 test "$output_words" -gt "$stripped_words"
 test "$output_words" -ge 25
+test "$sandwich_words" -ge 25
+test "$repeat_words" -ge 25
 
+cp "$work_dir/born-digital.pdf" "$work_dir/born-digital-strip-input.pdf"
 ocrmypdf \
+	--plugin src/ocrmypdf_progress_plugin.py \
+	--lossless-clean-invisible-layers \
 	--mode strip \
 	--output-type pdf \
 	--optimize 0 \
-	"$work_dir/born-digital.pdf" \
+	"$work_dir/born-digital-strip-input.pdf" \
 	"$work_dir/born-digital-stripped.pdf"
 born_pages="$(pdfinfo "$work_dir/born-digital-stripped.pdf" | awk '/^Pages:/ { print $2 }')"
 pdfinfo -f 1 -l "$born_pages" -box "$work_dir/born-digital-stripped.pdf" > "$work_dir/born-info.txt"
@@ -113,8 +172,20 @@ NODE
 
 pdftoppm -f 1 -singlefile -r 120 -png "$input" "$work_dir/input-render" >/dev/null 2>&1
 pdftoppm -f 1 -singlefile -r 120 -png "$output" "$work_dir/output-render" >/dev/null 2>&1
+pdftoppm -f 1 -singlefile -r 120 -png "$sandwich_output" "$work_dir/sandwich-render" >/dev/null 2>&1
+pdftoppm -f 1 -singlefile -r 120 -png "$repeat_output" "$work_dir/repeat-render" >/dev/null 2>&1
 python3 tests/compare_renders.py \
 	"$work_dir/input-render.png" \
 	"$work_dir/output-render.png"
+python3 tests/compare_renders.py \
+	"$work_dir/input-render.png" \
+	"$work_dir/sandwich-render.png"
+python3 tests/compare_renders.py \
+	"$work_dir/input-render.png" \
+	"$work_dir/repeat-render.png"
 
-printf 'end-to-end PDF test passed (%s -> %s words)\n' "$stripped_words" "$output_words"
+printf 'end-to-end PDF test passed (%s stripped -> %s fpdf2, %s sandwich, %s repeated words)\n' \
+	"$stripped_words" \
+	"$output_words" \
+	"$sandwich_words" \
+	"$repeat_words"

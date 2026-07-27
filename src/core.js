@@ -17,10 +17,25 @@ var LosslessOCRCore = (() => {
 		return language;
 	}
 
-	function stageArgs(language) {
+	function normalizePDFRenderer(value) {
+		const renderer = String(value || "fpdf2").trim().toLowerCase();
+		if (renderer !== "fpdf2" && renderer !== "sandwich") {
+			throw new Error(
+				"Invalid PDF renderer. Choose fpdf2 or sandwich."
+			);
+		}
+		return renderer;
+	}
+
+	function stageArgs(language, renderer = "fpdf2") {
 		return {
 			strip: ["--mode", "strip", ...PRESERVATION_ARGS],
-			redo: ["--mode", "redo", ...PRESERVATION_ARGS, "-l", normalizeLanguage(language)]
+			redo: [
+				"--mode", "redo",
+				...PRESERVATION_ARGS,
+				"--pdf-renderer", normalizePDFRenderer(renderer),
+				"-l", normalizeLanguage(language)
+			]
 		};
 	}
 
@@ -281,6 +296,7 @@ var LosslessOCRCore = (() => {
 	return {
 		PRESERVATION_ARGS,
 		normalizeLanguage,
+		normalizePDFRenderer,
 		stageArgs,
 		parsePDFInfo,
 		compareGeometry,

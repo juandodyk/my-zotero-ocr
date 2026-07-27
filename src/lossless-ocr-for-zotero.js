@@ -335,10 +335,20 @@ LosslessOCRForZotero = {
 			arguments: ["--version"],
 			workDir: PathUtils.tempDir
 		});
-		const versionMatch = versionOutput.match(/^(\d+)(?:\.\d+)*\s*$/m);
-		tools.supportsProgressPlugin = Boolean(
-			versionMatch && Number(versionMatch[1]) >= 17
-		);
+		const versionMatch = versionOutput.match(/^(\d+)\.(\d+)(?:\.\d+)*\s*$/m);
+		if (
+			!versionMatch
+			|| Number(versionMatch[1]) < 17
+			|| (
+				Number(versionMatch[1]) === 17
+				&& Number(versionMatch[2]) < 6
+			)
+		) {
+			throw new Error(
+				"Lossless OCR requires OCRmyPDF 17.6 or newer; found "
+				+ versionOutput.trim() + "."
+			);
+		}
 		return tools;
 	},
 
@@ -367,10 +377,14 @@ LosslessOCRForZotero = {
 		const language = LosslessOCRCore.normalizeLanguage(
 			this.getStringPref("language", "eng")
 		);
+		const pdfRenderer = LosslessOCRCore.normalizePDFRenderer(
+			this.getStringPref("pdfRenderer", "fpdf2")
+		);
 		const workDir = PathUtils.join(
 			PathUtils.tempDir,
 			"lossless-ocr-zotero-" + Date.now() + "-" + Math.random().toString(36).slice(2)
 		);
+		const stripInputPath = PathUtils.join(workDir, "strip-input.pdf");
 		const strippedPath = PathUtils.join(workDir, "stripped.pdf");
 		const outputPath = PathUtils.join(workDir, "output-ocr.pdf");
 		const progressPluginPath = PathUtils.join(workDir, "ocrmypdf_progress_plugin.py");
@@ -386,12 +400,22 @@ LosslessOCRForZotero = {
 
 		await IOUtils.makeDirectory(workDir);
 		try {
-			const args = LosslessOCRCore.stageArgs(language);
+			const args = LosslessOCRCore.stageArgs(language, pdfRenderer);
+			await this.installProgressPlugin(progressPluginPath);
+
+			progress.update("Preparing temporary PDF copy", 0.03);
+			await IOUtils.copy(sourcePath, stripInputPath);
 
 			progress.update("Stripping old invisible OCR", 0.05);
 			await this.runProcess({
 				command: tools.ocrmypdf,
-				arguments: [...args.strip, sourcePath, strippedPath],
+				arguments: [
+					"--plugin", progressPluginPath,
+					"--lossless-clean-invisible-layers",
+					...args.strip,
+					stripInputPath,
+					strippedPath
+				],
 				workDir,
 				progress
 			});
@@ -415,22 +439,14 @@ LosslessOCRForZotero = {
 			}
 
 			progress.update("Running replacement OCR", 0.30);
-			const redoArguments = [...args.redo];
-			if (tools.supportsProgressPlugin) {
-				try {
-					await this.installProgressPlugin(progressPluginPath);
-					redoArguments.unshift("--plugin", progressPluginPath);
-				}
-				catch (error) {
-					losslessOCRLog(
-						"Page progress unavailable; using stage progress: "
-						+ (error.stack || error)
-					);
-				}
-			}
 			await this.runProcess({
 				command: tools.ocrmypdf,
-				arguments: [...redoArguments, strippedPath, outputPath],
+				arguments: [
+					"--plugin", progressPluginPath,
+					...args.redo,
+					strippedPath,
+					outputPath
+				],
 				workDir,
 				progress,
 				onProgressEvent(event) {
