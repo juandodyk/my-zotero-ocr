@@ -107,6 +107,62 @@ var LosslessOCRCore = (() => {
 		return (String(text || "").trim().match(/\S+/g) || []).length;
 	}
 
+	function parsePDFImages(text, pdfInfo) {
+		const pages = new Map(pdfInfo.geometry.map(page => [page.page, page]));
+		const images = [];
+
+		for (const line of String(text || "").split(/\r?\n/)) {
+			const columns = line.trim().split(/\s+/);
+			if (columns.length < 14 || !/^\d+$/.test(columns[0]) || columns[2] !== "image") {
+				continue;
+			}
+
+			const pageNumber = Number(columns[0]);
+			const page = pages.get(pageNumber);
+			const width = Number(columns[3]);
+			const height = Number(columns[4]);
+			const xPPI = Number(columns[12]);
+			const yPPI = Number(columns[13]);
+			if (!page || !width || !height || !xPPI || !yPPI) continue;
+
+			const displayedWidth = width * 72 / xPPI;
+			const displayedHeight = height * 72 / yPPI;
+			const pageArea = page.width * page.height;
+			const coverage = pageArea
+				? Math.min(1, displayedWidth * displayedHeight / pageArea)
+				: 0;
+			images.push({
+				page: pageNumber,
+				width,
+				height,
+				xPPI,
+				yPPI,
+				coverage
+			});
+		}
+
+		return images;
+	}
+
+	function assessPreflight({ pdfInfo, text, pdfImages }) {
+		const words = countWords(text);
+		const substantial = Math.max(100, pdfInfo.pages * 20);
+		const images = parsePDFImages(pdfImages, pdfInfo);
+		const pageSizedImages = images.filter(image => image.coverage >= 0.65);
+		const shouldSkip = words >= substantial && pageSizedImages.length === 0;
+
+		return {
+			shouldSkip,
+			words,
+			substantial,
+			imageCount: images.length,
+			pageSizedImageCount: pageSizedImages.length,
+			reason: shouldSkip
+				? "substantial text remains after stripping and no page-sized scanned images were found"
+				: "the PDF is scanned, mixed, or ambiguous"
+		};
+	}
+
 	function assessText({ pages, strippedText, outputText }) {
 		const strippedWords = countWords(strippedText);
 		const outputWords = countWords(outputText);
@@ -172,6 +228,8 @@ var LosslessOCRCore = (() => {
 		parsePDFInfo,
 		compareGeometry,
 		countWords,
+		parsePDFImages,
+		assessPreflight,
 		assessText,
 		assessSize,
 		formatBytes,

@@ -15,11 +15,13 @@ directly selected PDF attachment, the extension:
 
 1. Copies nothing over the source yet.
 2. Strips invisible OCR without rasterizing the PDF.
-3. Runs replacement OCR on the stripped PDF while preserving visible text.
-4. Validates PDF syntax, page count, page dimensions, rotations, extracted
+3. Skips the expensive OCR stage when substantial born-digital text remains
+   and no page-sized scanned images are present.
+4. Runs replacement OCR on scanned, mixed, or ambiguous PDFs.
+5. Validates PDF syntax, page count, page dimensions, rotations, extracted
    text, and file-size growth.
-5. Optionally imports the pre-OCR PDF as a sibling backup attachment.
-6. Replaces the file behind the existing Zotero attachment and asks Zotero to
+6. Optionally imports the unchanged source directly as a sibling backup.
+7. Replaces the file behind the existing Zotero attachment and asks Zotero to
    reindex it.
 
 Keeping the attachment item in place preserves Zotero annotations, relations,
@@ -64,7 +66,8 @@ recipe this extension implements.
 
 - Zotero 7, 8, or 9
 - [OCRmyPDF](https://ocrmypdf.readthedocs.io/) with Tesseract
-- `qpdf`, `pdfinfo`, and `pdftotext` for pre-replacement validation
+- `qpdf`, `pdfinfo`, `pdftotext`, and `pdfimages` for preflight detection and
+  pre-replacement validation
 
 On macOS with Homebrew:
 
@@ -76,9 +79,12 @@ The extension searches Homebrew and common Unix executable locations. A custom
 path to `ocrmypdf` and one or more Tesseract languages can be set in Zotero's
 plugin preferences.
 
+To disable original-PDF backups, open **Zotero Settings → Lossless OCR** and
+uncheck **Keep the pre-OCR PDF as a sibling attachment**.
+
 ## Install
 
-Download `lossless-ocr-for-zotero-1.0.0.xpi` from the latest GitHub release.
+Download `lossless-ocr-for-zotero-1.1.0.xpi` from the latest GitHub release.
 In Zotero, open **Tools → Plugins**, choose **Install Plugin From File**, and
 select the XPI.
 

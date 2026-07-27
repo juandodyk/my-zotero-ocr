@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-for command in ocrmypdf qpdf pdfinfo pdftotext pdftoppm python3; do
+for command in ocrmypdf qpdf pdfinfo pdftotext pdfimages pdftoppm python3; do
 	if ! command -v "$command" >/dev/null 2>&1; then
 		printf 'missing required test command: %s\n' "$command" >&2
 		exit 1
@@ -18,6 +18,7 @@ stripped="$work_dir/stripped.pdf"
 output="$work_dir/output.pdf"
 
 python3 tests/make_fixture.py "$input"
+python3 tests/make_born_digital_fixture.py "$work_dir/born-digital.pdf"
 
 ocrmypdf \
 	--mode strip \
@@ -53,10 +54,42 @@ NODE
 
 pdftotext "$stripped" "$work_dir/stripped.txt"
 pdftotext "$output" "$work_dir/output.txt"
+pdfimages -list "$stripped" > "$work_dir/stripped-images.txt"
 stripped_words="$(wc -w < "$work_dir/stripped.txt" | tr -d ' ')"
 output_words="$(wc -w < "$work_dir/output.txt" | tr -d ' ')"
 test "$output_words" -gt "$stripped_words"
 test "$output_words" -ge 25
+
+ocrmypdf \
+	--mode strip \
+	--output-type pdf \
+	--optimize 0 \
+	--fast-web-view 0 \
+	"$work_dir/born-digital.pdf" \
+	"$work_dir/born-digital-stripped.pdf"
+born_pages="$(pdfinfo "$work_dir/born-digital-stripped.pdf" | awk '/^Pages:/ { print $2 }')"
+pdfinfo -f 1 -l "$born_pages" -box "$work_dir/born-digital-stripped.pdf" > "$work_dir/born-info.txt"
+pdftotext "$work_dir/born-digital-stripped.pdf" "$work_dir/born-text.txt"
+pdfimages -list "$work_dir/born-digital-stripped.pdf" > "$work_dir/born-images.txt"
+node - "$work_dir/input-info.txt" "$work_dir/stripped.txt" "$work_dir/stripped-images.txt" \
+	"$work_dir/born-info.txt" "$work_dir/born-text.txt" "$work_dir/born-images.txt" <<'NODE'
+const fs = require("node:fs");
+const core = require("./src/core.js");
+const read = path => fs.readFileSync(path, "utf8");
+const scanned = core.assessPreflight({
+	pdfInfo: core.parsePDFInfo(read(process.argv[2])),
+	text: read(process.argv[3]),
+	pdfImages: read(process.argv[4])
+});
+const bornDigital = core.assessPreflight({
+	pdfInfo: core.parsePDFInfo(read(process.argv[5])),
+	text: read(process.argv[6]),
+	pdfImages: read(process.argv[7])
+});
+if (scanned.shouldSkip) throw new Error("scanned fixture was incorrectly skipped");
+if (!bornDigital.shouldSkip) throw new Error("born-digital fixture was not skipped");
+console.log(`preflight passed (${scanned.words} scanned words; ${bornDigital.words} born-digital words)`);
+NODE
 
 pdftoppm -f 1 -singlefile -r 120 -png "$input" "$work_dir/input-render" >/dev/null 2>&1
 pdftoppm -f 1 -singlefile -r 120 -png "$output" "$work_dir/output-render" >/dev/null 2>&1

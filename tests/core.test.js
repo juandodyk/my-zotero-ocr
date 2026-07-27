@@ -73,4 +73,32 @@ assert.equal(core.isBackupAttachment({
 	getDisplayTitle: () => "Paper"
 }), false);
 
+const scannedImageList = [
+	"page   num  type   width height color comp bpc  enc interp  object ID x-ppi y-ppi size ratio",
+	"--------------------------------------------------------------------------------------------",
+	"   1     0 image    1275  1650  rgb     3   8  jpeg   no         3  0   150   150  142K 2.3%"
+].join("\n");
+const singlePageInfo = {
+	pages: 1,
+	geometry: [{ page: 1, width: 612, height: 792, rotation: 0 }]
+};
+const images = core.parsePDFImages(scannedImageList, singlePageInfo);
+assert.equal(images.length, 1);
+assert.ok(images[0].coverage > 0.99);
+assert.equal(core.assessPreflight({
+	pdfInfo: singlePageInfo,
+	text: "visible footer",
+	pdfImages: scannedImageList
+}).shouldSkip, false);
+assert.equal(core.assessPreflight({
+	pdfInfo: singlePageInfo,
+	text: Array.from({ length: 120 }, (_, i) => "word" + i).join(" "),
+	pdfImages: ""
+}).shouldSkip, true);
+assert.equal(core.assessPreflight({
+	pdfInfo: singlePageInfo,
+	text: Array.from({ length: 120 }, (_, i) => "word" + i).join(" "),
+	pdfImages: scannedImageList
+}).shouldSkip, false);
+
 console.log("core tests passed");

@@ -89,6 +89,7 @@ LosslessOCRForZotero = {
 		const progress = makeProgressWindow("Checking tools");
 		const failures = [];
 		let completed = 0;
+		let skipped = 0;
 
 		try {
 			const tools = await this.findRequiredTools();
@@ -105,8 +106,9 @@ LosslessOCRForZotero = {
 				this.processingItemIDs.add(job.pdfItem.id);
 				try {
 					progress.update("Preparing " + job.pdfItem.getDisplayTitle());
-					await this.processPDF({ ...job, tools, progress, window });
-					completed++;
+					const result = await this.processPDF({ ...job, tools, progress, window });
+					if (result.status === "skipped") skipped++;
+					else completed++;
 				}
 				catch (error) {
 					losslessOCRLog(error.stack || error);
@@ -122,11 +124,12 @@ LosslessOCRForZotero = {
 			}
 
 			progress.finish(
-				completed + " PDF" + (completed === 1 ? "" : "s") + " completed"
+				completed + " OCRed, " + skipped + " skipped"
 			);
 			if (failures.length) {
 				window.alert(
-					"Lossless OCR completed " + completed + " PDF(s), with "
+					"Lossless OCR completed " + completed + " PDF(s), skipped "
+					+ skipped + ", with "
 					+ failures.length + " failure(s):\n\n" + failures.join("\n\n")
 				);
 			}
@@ -212,7 +215,7 @@ LosslessOCRForZotero = {
 
 		const directory = PathUtils.parent(ocrmypdf);
 		const tools = { ocrmypdf };
-		for (const name of ["qpdf", "pdfinfo", "pdftotext"]) {
+		for (const name of ["qpdf", "pdfinfo", "pdftotext", "pdfimages"]) {
 			tools[name] = await this.findExecutable(name, directory);
 			if (!tools[name]) {
 				throw new Error(
@@ -258,7 +261,6 @@ LosslessOCRForZotero = {
 		const outputTextPath = PathUtils.join(workDir, "output.txt");
 		const filename = pdfItem.attachmentFilename || PathUtils.filename(sourcePath);
 		const baseName = filename.replace(/\.pdf$/i, "");
-		const backupPath = PathUtils.join(workDir, baseName + " - original.pdf");
 		const replacementPath = PathUtils.join(
 			PathUtils.parent(sourcePath),
 			"." + filename + ".lossless-ocr-" + Date.now() + ".tmp"
@@ -277,12 +279,23 @@ LosslessOCRForZotero = {
 				progress
 			});
 
-			progress.update("Checking stripped PDF");
-			await this.runProcess({
-				command: tools.qpdf,
-				arguments: ["--check", strippedPath],
+			progress.update("Checking whether OCR is needed");
+			const preflight = await this.runPreflight({
+				sourcePath,
+				strippedPath,
+				strippedTextPath,
+				tools,
 				workDir
 			});
+			if (preflight.shouldSkip) {
+				progress.update("Skipped born-digital PDF");
+				losslessOCRLog(
+					"Skipped " + sourcePath + ": " + preflight.reason
+					+ " (" + preflight.words + " words)"
+				);
+				completed = true;
+				return { status: "skipped", preflight };
+			}
 
 			progress.update("Running replacement OCR");
 			await this.runProcess({
@@ -295,12 +308,11 @@ LosslessOCRForZotero = {
 			progress.update("Validating OCR output");
 			const validation = await this.validateOutput({
 				sourcePath,
-				strippedPath,
 				outputPath,
-				strippedTextPath,
 				outputTextPath,
 				tools,
-				workDir
+				workDir,
+				preflight
 			});
 
 			if (validation.warnings.length) {
@@ -315,12 +327,12 @@ LosslessOCRForZotero = {
 			}
 			if (this.getBoolPref("keepBackup", true)) {
 				progress.update("Saving original PDF backup");
-				await IOUtils.copy(sourcePath, backupPath);
 				await Zotero.Attachments.importFromFile({
-					file: backupPath,
+					file: sourcePath,
 					libraryID: parentItem.libraryID,
 					parentItemID: parentItem.id,
 					title: "Original PDF backup (before lossless OCR): " + baseName,
+					fileBaseName: baseName + " - original",
 					contentType: "application/pdf"
 				});
 			}
@@ -335,6 +347,7 @@ LosslessOCRForZotero = {
 				"Completed " + sourcePath + ": " + validation.outputWords
 				+ " words, " + LosslessOCRCore.formatBytes(validation.outputBytes)
 			);
+			return { status: "completed", validation };
 		}
 		catch (error) {
 			error.workDir = workDir;
@@ -355,47 +368,82 @@ LosslessOCRForZotero = {
 
 	async validateOutput({
 		sourcePath,
-		strippedPath,
 		outputPath,
-		strippedTextPath,
 		outputTextPath,
 		tools,
-		workDir
+		workDir,
+		preflight
 	}) {
-		await this.runProcess({
-			command: tools.qpdf,
-			arguments: ["--check", outputPath],
-			workDir
-		});
-
-		const sourceInfo = await this.readPDFInfo(tools.pdfinfo, sourcePath, workDir);
-		const outputInfo = await this.readPDFInfo(tools.pdfinfo, outputPath, workDir);
-		LosslessOCRCore.compareGeometry(sourceInfo, outputInfo);
-
-		await this.runProcess({
-			command: tools.pdftotext,
-			arguments: [strippedPath, strippedTextPath],
-			workDir
-		});
-		await this.runProcess({
-			command: tools.pdftotext,
-			arguments: [outputPath, outputTextPath],
-			workDir
-		});
+		const [, outputInfo, outputText, inputStat, outputStat] = await this.awaitAll([
+			this.runProcess({
+				command: tools.qpdf,
+				arguments: ["--check", outputPath],
+				workDir
+			}),
+			this.readPDFInfo(tools.pdfinfo, outputPath, workDir),
+			this.extractText(tools.pdftotext, outputPath, outputTextPath, workDir),
+			IOUtils.stat(sourcePath),
+			IOUtils.stat(outputPath)
+		]);
+		LosslessOCRCore.compareGeometry(preflight.sourceInfo, outputInfo);
 
 		const textAssessment = LosslessOCRCore.assessText({
 			pages: outputInfo.pages,
-			strippedText: await IOUtils.readUTF8(strippedTextPath),
-			outputText: await IOUtils.readUTF8(outputTextPath)
+			strippedText: preflight.strippedText,
+			outputText
 		});
-		const inputStat = await IOUtils.stat(sourcePath);
-		const outputStat = await IOUtils.stat(outputPath);
 		const sizeAssessment = LosslessOCRCore.assessSize(inputStat.size, outputStat.size);
 
 		return {
 			...textAssessment,
 			...sizeAssessment
 		};
+	},
+
+	async runPreflight({ sourcePath, strippedPath, strippedTextPath, tools, workDir }) {
+		const [, sourceInfo, strippedInfo, strippedText, pdfImages] = await this.awaitAll([
+			this.runProcess({
+				command: tools.qpdf,
+				arguments: ["--check", strippedPath],
+				workDir
+			}),
+			this.readPDFInfo(tools.pdfinfo, sourcePath, workDir),
+			this.readPDFInfo(tools.pdfinfo, strippedPath, workDir),
+			this.extractText(tools.pdftotext, strippedPath, strippedTextPath, workDir),
+			this.runProcess({
+				command: tools.pdfimages,
+				arguments: ["-list", strippedPath],
+				workDir
+			})
+		]);
+		LosslessOCRCore.compareGeometry(sourceInfo, strippedInfo);
+
+		return {
+			...LosslessOCRCore.assessPreflight({
+				pdfInfo: strippedInfo,
+				text: strippedText,
+				pdfImages
+			}),
+			sourceInfo,
+			strippedInfo,
+			strippedText
+		};
+	},
+
+	async extractText(pdftotext, inputPath, outputPath, workDir) {
+		await this.runProcess({
+			command: pdftotext,
+			arguments: [inputPath, outputPath],
+			workDir
+		});
+		return IOUtils.readUTF8(outputPath);
+	},
+
+	async awaitAll(promises) {
+		const results = await Promise.allSettled(promises);
+		const failure = results.find(result => result.status === "rejected");
+		if (failure) throw failure.reason;
+		return results.map(result => result.value);
 	},
 
 	async readPDFInfo(pdfinfo, path, workDir) {
