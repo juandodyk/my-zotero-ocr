@@ -21,6 +21,33 @@ assert.throws(() => core.normalizeLanguage("eng --force-ocr"), /Invalid OCR lang
 assert.equal(core.mapBatchProgress(0, 2, 0), 5);
 assert.equal(core.mapBatchProgress(0, 2, 1), 52);
 assert.equal(core.mapBatchProgress(1, 2, 1), 99);
+const ocrProgress = core.parseOCRProgressEvent(
+	'LOSSLESS_OCR_PROGRESS {"description":"OCR","unit":"page","completed":4,"total":8}'
+);
+assert.deepEqual(ocrProgress, {
+	description: "OCR",
+	unit: "page",
+	completed: 4,
+	total: 8
+});
+assert.deepEqual(core.describeOCRProgress(ocrProgress), {
+	text: "OCR pages: 4 of 8",
+	fraction: 0.5
+});
+assert.equal(core.describeOCRProgress({
+	...ocrProgress,
+	completed: 4.5
+}), null);
+assert.deepEqual(core.describeOCRProgress({
+	description: "Linearizing",
+	unit: "%",
+	completed: 50,
+	total: 100
+}), {
+	text: "Writing PDF structure",
+	fraction: 0.71
+});
+assert.equal(core.parseOCRProgressEvent("ordinary OCRmyPDF output"), null);
 
 const info = [
 	"Pages:           2",

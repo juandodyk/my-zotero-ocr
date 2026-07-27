@@ -32,9 +32,9 @@ the temporary work directory is retained. Soft text-quality warnings require
 confirmation before replacement.
 
 During processing, Zotero shows an in-window horizontal progress bar with the
-current stage and batch-aware percentage. The percentage is stage-weighted
-because OCRmyPDF does not expose reliable page-by-page progress through its
-captured subprocess output.
+current stage and batch-aware percentage. With OCRmyPDF 17 or newer, the bar
+advances after each completed OCR page and displays the completed and total
+page counts. Older OCRmyPDF releases retain stage-weighted progress.
 
 ## Preservation recipe
 
@@ -87,7 +87,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 
 ## Install
 
-Download `lossless-ocr-for-zotero-1.2.0.xpi` from the latest GitHub release.
+Download `lossless-ocr-for-zotero-1.3.0.xpi` from the latest GitHub release.
 In Zotero, open **Tools → Plugins**, choose **Install Plugin From File**, and
 select the XPI.
 

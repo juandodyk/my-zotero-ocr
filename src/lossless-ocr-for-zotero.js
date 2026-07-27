@@ -330,6 +330,15 @@ LosslessOCRForZotero = {
 				);
 			}
 		}
+		const versionOutput = await this.runProcess({
+			command: ocrmypdf,
+			arguments: ["--version"],
+			workDir: PathUtils.tempDir
+		});
+		const versionMatch = versionOutput.match(/^(\d+)(?:\.\d+)*\s*$/m);
+		tools.supportsProgressPlugin = Boolean(
+			versionMatch && Number(versionMatch[1]) >= 17
+		);
 		return tools;
 	},
 
@@ -364,6 +373,7 @@ LosslessOCRForZotero = {
 		);
 		const strippedPath = PathUtils.join(workDir, "stripped.pdf");
 		const outputPath = PathUtils.join(workDir, "output-ocr.pdf");
+		const progressPluginPath = PathUtils.join(workDir, "ocrmypdf_progress_plugin.py");
 		const strippedTextPath = PathUtils.join(workDir, "stripped.txt");
 		const outputTextPath = PathUtils.join(workDir, "output.txt");
 		const filename = pdfItem.attachmentFilename || PathUtils.filename(sourcePath);
@@ -405,11 +415,28 @@ LosslessOCRForZotero = {
 			}
 
 			progress.update("Running replacement OCR", 0.30);
+			const redoArguments = [...args.redo];
+			if (tools.supportsProgressPlugin) {
+				try {
+					await this.installProgressPlugin(progressPluginPath);
+					redoArguments.unshift("--plugin", progressPluginPath);
+				}
+				catch (error) {
+					losslessOCRLog(
+						"Page progress unavailable; using stage progress: "
+						+ (error.stack || error)
+					);
+				}
+			}
 			await this.runProcess({
 				command: tools.ocrmypdf,
-				arguments: [...args.redo, strippedPath, outputPath],
+				arguments: [...redoArguments, strippedPath, outputPath],
 				workDir,
-				progress
+				progress,
+				onProgressEvent(event) {
+					const update = LosslessOCRCore.describeOCRProgress(event);
+					if (update) progress.update(update.text, update.fraction);
+				}
 			});
 			progress.update("OCR finished", 0.72);
 
@@ -540,6 +567,13 @@ LosslessOCRForZotero = {
 		};
 	},
 
+	async installProgressPlugin(destinationPath) {
+		const source = await Zotero.File.getContentsFromURLAsync(
+			this.rootURI + "ocrmypdf_progress_plugin.py"
+		);
+		await IOUtils.writeUTF8(destinationPath, source);
+	},
+
 	async extractText(pdftotext, inputPath, outputPath, workDir) {
 		await this.runProcess({
 			command: pdftotext,
@@ -573,7 +607,7 @@ LosslessOCRForZotero = {
 		return LosslessOCRCore.parsePDFInfo(detailed);
 	},
 
-	async runProcess({ command, arguments: args, workDir, progress }) {
+	async runProcess({ command, arguments: args, workDir, progress, onProgressEvent }) {
 		losslessOCRLog("Running " + command + " " + args.map(this.quoteArgument).join(" "));
 		const proc = await Subprocess.call({
 			command,
@@ -585,15 +619,26 @@ LosslessOCRForZotero = {
 		});
 
 		let output = "";
+		let progressBuffer = "";
+		const consumeProgressLine = line => {
+			if (!onProgressEvent) return;
+			const event = LosslessOCRCore.parseOCRProgressEvent(line);
+			if (event) onProgressEvent(event);
+		};
 		let chunk;
 		while ((chunk = await proc.stdout.readString())) {
 			output += chunk;
 			losslessOCRLog(chunk);
+			progressBuffer += chunk;
+			const lines = progressBuffer.split(/\r?\n/);
+			progressBuffer = lines.pop();
+			for (const line of lines) consumeProgressLine(line);
 			if (progress) {
 				const message = this.describeProcessOutput(chunk);
 				if (message) progress.update(message);
 			}
 		}
+		if (progressBuffer) consumeProgressLine(progressBuffer);
 
 		const { exitCode } = await proc.wait();
 		if (exitCode !== 0) {

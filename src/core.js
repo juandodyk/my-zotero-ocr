@@ -5,6 +5,7 @@ var LosslessOCRCore = (() => {
 		"--output-type", "pdf",
 		"--optimize", "0"
 	];
+	const PROGRESS_MARKER = "LOSSLESS_OCR_PROGRESS ";
 
 	function normalizeLanguage(value) {
 		const language = String(value || "eng").trim();
@@ -111,6 +112,56 @@ var LosslessOCRCore = (() => {
 		const index = Math.min(count - 1, Math.max(0, Number(itemIndex) || 0));
 		const fraction = Math.min(1, Math.max(0, Number(itemFraction) || 0));
 		return start + (end - start) * (index + fraction) / count;
+	}
+
+	function parseOCRProgressEvent(line) {
+		const markerIndex = String(line || "").indexOf(PROGRESS_MARKER);
+		if (markerIndex === -1) return null;
+
+		try {
+			const event = JSON.parse(
+				String(line).slice(markerIndex + PROGRESS_MARKER.length)
+			);
+			const completed = Number(event.completed);
+			const total = Number(event.total);
+			if (
+				typeof event.description !== "string"
+				|| typeof event.unit !== "string"
+				|| !Number.isFinite(completed)
+				|| !Number.isFinite(total)
+				|| total <= 0
+			) {
+				return null;
+			}
+			return {
+				description: event.description,
+				unit: event.unit,
+				completed,
+				total
+			};
+		}
+		catch (_error) {
+			return null;
+		}
+	}
+
+	function describeOCRProgress(event) {
+		const ratio = Math.min(1, Math.max(0, event.completed / event.total));
+		if (event.description === "OCR" && event.unit === "page") {
+			if (!Number.isInteger(event.completed)) return null;
+			const completed = Math.min(event.total, Math.max(0, event.completed));
+			return {
+				text: "OCR pages: " + completed + " of " + event.total,
+				fraction: 0.30 + 0.40 * ratio
+			};
+		}
+		if (event.description === "Linearizing" && event.unit === "%") {
+			return {
+				text: "Writing PDF structure",
+				fraction: 0.70 + 0.02 * ratio
+			};
+		}
+		return null;
 	}
 
 	function parsePDFImages(text, pdfInfo) {
@@ -235,6 +286,8 @@ var LosslessOCRCore = (() => {
 		compareGeometry,
 		countWords,
 		mapBatchProgress,
+		parseOCRProgressEvent,
+		describeOCRProgress,
 		parsePDFImages,
 		assessPreflight,
 		assessText,

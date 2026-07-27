@@ -16,6 +16,7 @@ trap 'status=$?; if [ "$status" -eq 0 ]; then rm -rf "$work_dir"; else printf "t
 input="$work_dir/input.pdf"
 stripped="$work_dir/stripped.pdf"
 output="$work_dir/output.pdf"
+progress_log="$work_dir/progress.log"
 
 python3 tests/make_fixture.py "$input"
 python3 tests/make_born_digital_fixture.py "$work_dir/born-digital.pdf"
@@ -27,13 +28,35 @@ ocrmypdf \
 	"$input" \
 	"$stripped"
 
-ocrmypdf \
+if ! ocrmypdf \
+	--plugin src/ocrmypdf_progress_plugin.py \
 	--mode redo \
 	--output-type pdf \
 	--optimize 0 \
 	-l eng \
 	"$stripped" \
-	"$output"
+	"$output" \
+	2>"$progress_log"; then
+	cat "$progress_log" >&2
+	exit 1
+fi
+node - "$progress_log" <<'NODE'
+const fs = require("node:fs");
+const core = require("./src/core.js");
+const events = fs.readFileSync(process.argv[2], "utf8")
+	.split(/\r?\n/)
+	.map(line => core.parseOCRProgressEvent(line))
+	.filter(Boolean);
+if (!events.some(event =>
+	event.description === "OCR"
+	&& event.unit === "page"
+	&& event.completed === 1
+	&& event.total === 1
+)) {
+	throw new Error("OCRmyPDF did not report completed-page progress");
+}
+console.log("page progress reporting passed");
+NODE
 
 qpdf --check "$output"
 
