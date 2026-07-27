@@ -17,7 +17,8 @@ directly selected PDF attachment, the extension:
 2. Recursively removes conventional invisible text and prior OCRmyPDF
    `/OCR-*` Form layers from that copy, then runs OCRmyPDF's `strip` mode.
 3. Skips the expensive OCR stage when substantial born-digital text remains
-   and no page-sized scanned images are present.
+   and no scanned-page images are present. Older pages assembled from multiple
+   full-width image strips are recognized as scans.
 4. Runs replacement OCR with the selected text-layer renderer on scanned,
    mixed, or ambiguous PDFs.
 5. Validates PDF syntax, page count, page dimensions, rotations, extracted

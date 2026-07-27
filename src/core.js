@@ -248,6 +248,9 @@ var LosslessOCRCore = (() => {
 				height,
 				xPPI,
 				yPPI,
+				displayedWidth,
+				displayedHeight,
+				widthCoverage: page.width ? Math.min(1, displayedWidth / page.width) : 0,
 				coverage
 			});
 		}
@@ -259,15 +262,30 @@ var LosslessOCRCore = (() => {
 		const words = countWords(text);
 		const substantial = Math.max(100, pdfInfo.pages * 20);
 		const images = parsePDFImages(pdfImages, pdfInfo);
-		const pageSizedImages = images.filter(image => image.coverage >= 0.65);
-		const shouldSkip = words >= substantial && pageSizedImages.length === 0;
+		const scannedPages = new Set(
+			images
+				.filter(image => image.coverage >= 0.65)
+				.map(image => image.page)
+		);
+		const wideStripCoverage = new Map();
+		for (const image of images) {
+			if (image.widthCoverage < 0.8) continue;
+			wideStripCoverage.set(
+				image.page,
+				(wideStripCoverage.get(image.page) || 0) + image.coverage
+			);
+		}
+		for (const [page, coverage] of wideStripCoverage) {
+			if (coverage >= 0.65) scannedPages.add(page);
+		}
+		const shouldSkip = words >= substantial && scannedPages.size === 0;
 
 		return {
 			shouldSkip,
 			words,
 			substantial,
 			imageCount: images.length,
-			pageSizedImageCount: pageSizedImages.length,
+			pageSizedImageCount: scannedPages.size,
 			reason: shouldSkip
 				? "substantial text remains after stripping and no page-sized scanned images were found"
 				: "the PDF is scanned, mixed, or ambiguous"

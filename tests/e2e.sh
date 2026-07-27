@@ -25,6 +25,7 @@ repeat_output="$work_dir/repeat-output.pdf"
 progress_log="$work_dir/progress.log"
 cleanup_log="$work_dir/cleanup.log"
 ocrmypdf_python="$(sed -n '1s/^#!//p' "$(command -v ocrmypdf)")"
+"$ocrmypdf_python" tests/test_invisible_cleanup.py
 
 python3 tests/make_fixture.py "$input"
 python3 tests/make_born_digital_fixture.py "$work_dir/born-digital.pdf"

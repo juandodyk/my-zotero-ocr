@@ -222,10 +222,17 @@ def _clean_instructions(container, removed_xobjects):
     stream = []
     text_object = []
     in_text_object = False
+    removed_text_from_object = False
     render_mode = 0
     render_mode_stack = []
     removed_text_objects = 0
     removed_invocations = 0
+    text_showing_operators = {
+        Operator("Tj"),
+        Operator("TJ"),
+        Operator("'"),
+        Operator('"'),
+    }
 
     for instruction in parse_content_stream(container, ""):
         operands, operator = instruction.operands, instruction.operator
@@ -246,24 +253,38 @@ def _clean_instructions(container, removed_xobjects):
                 removed_invocations += 1
             elif operator == Operator("BT"):
                 in_text_object = True
+                removed_text_from_object = False
                 text_object.append((operands, operator))
             else:
                 stream.append((operands, operator))
         else:
-            text_object.append((operands, operator))
+            if operator in text_showing_operators and render_mode == 3:
+                removed_text_from_object = True
+                # The quote operators also change text position and spacing.
+                # Preserve those non-painting effects when removing their text.
+                if operator == Operator("'"):
+                    text_object.append(([], Operator("T*")))
+                elif operator == Operator('"'):
+                    text_object.extend(
+                        [
+                            ([operands[0]], Operator("Tw")),
+                            ([operands[1]], Operator("Tc")),
+                            ([], Operator("T*")),
+                        ]
+                    )
+            else:
+                text_object.append((operands, operator))
             if operator == Operator("ET"):
                 in_text_object = False
-                if render_mode == 3:
+                if removed_text_from_object:
                     removed_text_objects += 1
-                else:
-                    stream.extend(text_object)
+                stream.extend(text_object)
                 text_object.clear()
 
     if text_object:
-        if render_mode == 3:
+        if removed_text_from_object:
             removed_text_objects += 1
-        else:
-            stream.extend(text_object)
+        stream.extend(text_object)
 
     return (
         unparse_content_stream(stream),

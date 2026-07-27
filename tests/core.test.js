@@ -152,4 +152,20 @@ assert.equal(core.assessPreflight({
 	pdfImages: scannedImageList
 }).shouldSkip, false);
 
+const segmentedScanImageList = [
+	scannedImageList.split("\n")[0],
+	scannedImageList.split("\n")[1],
+	"   1     0 image    1275   400  gray    1   1  ccitt  no         3  0   150   150  10K 2.3%",
+	"   1     1 image    1275   400  gray    1   1  ccitt  no         4  0   150   150  10K 2.3%",
+	"   1     2 image    1275   400  gray    1   1  ccitt  no         5  0   150   150  10K 2.3%",
+	"   1     3 image    1275   400  gray    1   1  ccitt  no         6  0   150   150  10K 2.3%"
+].join("\n");
+const segmentedAssessment = core.assessPreflight({
+	pdfInfo: singlePageInfo,
+	text: Array.from({ length: 120 }, (_, i) => "word" + i).join(" "),
+	pdfImages: segmentedScanImageList
+});
+assert.equal(segmentedAssessment.shouldSkip, false);
+assert.equal(segmentedAssessment.pageSizedImageCount, 1);
+
 console.log("core tests passed");
