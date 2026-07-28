@@ -1,6 +1,6 @@
 {
   "name": "lossless-ocr-for-zotero",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "private": true,
   "description": "Lossless OCR replacement for scanned Zotero PDFs",
   "scripts": {

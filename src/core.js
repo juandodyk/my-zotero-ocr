@@ -19,41 +19,15 @@ var LosslessOCRCore = (() => {
 
 	function normalizePDFRenderer(value) {
 		const renderer = String(value || "fpdf2").trim().toLowerCase();
-		if (
-			renderer !== "fpdf2"
-			&& renderer !== "sandwich"
-			&& renderer !== "word-box"
-		) {
+		// Migrate the renderer removed after 1.5.2 without breaking existing
+		// installations that still have it stored in Zotero preferences.
+		if (renderer === "word-box") return "sandwich";
+		if (renderer !== "fpdf2" && renderer !== "sandwich") {
 			throw new Error(
-				"Invalid PDF renderer. Choose fpdf2, sandwich, or word-box."
+				"Invalid PDF renderer. Choose fpdf2 or sandwich."
 			);
 		}
 		return renderer;
-	}
-
-	function describePDFRenderer(renderer) {
-		switch (normalizePDFRenderer(renderer)) {
-			case "word-box":
-				return "word boxes";
-			case "sandwich":
-				return "sandwich";
-			default:
-				return "fpdf2";
-		}
-	}
-
-	function validatePDFRenderer(renderer, pdfInfo) {
-		const normalizedRenderer = normalizePDFRenderer(renderer);
-		if (normalizedRenderer !== "word-box") return;
-
-		if (!String(pdfInfo.creator || "").includes(
-			"Lossless OCR word-box renderer"
-		)) {
-			throw new Error(
-				"The word-box renderer was requested, but OCRmyPDF produced "
-				+ "a different text layer. The source PDF has not been replaced."
-			);
-		}
 	}
 
 	function stageArgs(language, renderer = "fpdf2") {
@@ -64,10 +38,7 @@ var LosslessOCRCore = (() => {
 				"--mode", "redo",
 				...PRESERVATION_ARGS,
 				"--pdf-renderer",
-				normalizedRenderer === "word-box" ? "sandwich" : normalizedRenderer,
-				...(normalizedRenderer === "word-box"
-					? ["--lossless-word-box-renderer"]
-					: []),
+				normalizedRenderer,
 				"-l", normalizeLanguage(language)
 			]
 		};
@@ -120,11 +91,9 @@ var LosslessOCRCore = (() => {
 			});
 		}
 
-		const creatorMatch = text.match(/^Creator:\s+(.+?)\s*$/m);
 		return {
 			pages,
-			geometry,
-			creator: creatorMatch ? creatorMatch[1] : ""
+			geometry
 		};
 	}
 
@@ -354,8 +323,6 @@ var LosslessOCRCore = (() => {
 		PRESERVATION_ARGS,
 		normalizeLanguage,
 		normalizePDFRenderer,
-		describePDFRenderer,
-		validatePDFRenderer,
 		stageArgs,
 		parsePDFInfo,
 		compareGeometry,

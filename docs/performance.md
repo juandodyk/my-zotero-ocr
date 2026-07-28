@@ -31,7 +31,7 @@ to rewrite the PDF structure.
 ## Text-layer renderer comparison
 
 Tested on 2026-07-27 with OCRmyPDF 17.8.1 and Tesseract 5.5.2. The source was
-the first page of a 300 dpi JSTOR scan. All three outputs passed `qpdf --check`,
+the first page of a 300 dpi JSTOR scan. Both outputs passed `qpdf --check`,
 extracted equivalent body text, and produced pixel-identical Poppler renders.
 
 Selection height for the first word `This` in the abstract:
@@ -40,37 +40,10 @@ Selection height for the first word `This` in the abstract:
 | --- | ---: | ---: |
 | `fpdf2` | 8.581 pt | 95,947 bytes |
 | `sandwich` | 8.008 pt | 91,005 bytes |
-| `word-box` | 6.306 pt | 93,319 bytes |
 
-The detected hOCR word itself was approximately 6.24 pt high. The word-box
-renderer therefore tracked the printed glyph height much more closely than
-the line-oriented alternatives. For a larger body-text occurrence of `This`,
-the corresponding heights were 10.787 pt, 10.010 pt, and 8.288 pt.
-
-The word-box renderer asks Tesseract for hOCR, text, and a text-only PDF in one
-invocation. It keeps the PDF's embedded Unicode `GlyphLessFont` but replaces
-Tesseract's line-oriented content stream with invisible, horizontally scaled
-text positioned from each hOCR word box and baseline.
-
-A 32-page end-to-end run on the complete article took 13.16 seconds. A second
-run took 14.50 seconds, removed all 32 earlier OCR Forms, and again produced
-exactly one OCR Form per page. Both runs extracted 13,089 words. The first
-output was 2,496,526 bytes versus 2,531,067 bytes for the source, and sampled
-pages were pixel-identical across the source and both outputs.
-
-### Zotero/PDF.js selection validation
-
-Version 1.5.1 adds an activation check after a preference-selection failure
-silently produced `sandwich` output while `word boxes` appeared selected.
-Renderer selection is now saved immediately, shown in the progress message,
-and verified from the output PDF's creator stamp before replacement.
-
-The actual word-box output was tested on page 6 of Dewatripont and Tirole
-(1994) with Zotero's bundled PDF.js 5.4.0 and Firefox 152. A browser range
-selection spanning prose, an assumption, displayed equations, and another
-paragraph produced separate hOCR-aligned word rectangles. The same test also
-confirmed that changing the page-level coordinate reflection was incorrect;
-PDF.js already accounts for the PDF-to-screen coordinate conversion.
+For a larger body-text occurrence of `This`, the corresponding heights were
+10.787 pt and 10.010 pt. On these Latin-script fixtures, `sandwich` produced
+slightly tighter selection geometry and a smaller output.
 
 ### Other free renderer tested
 

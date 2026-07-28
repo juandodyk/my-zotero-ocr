@@ -18,7 +18,6 @@ strip_input="$work_dir/strip-input.pdf"
 stripped="$work_dir/stripped.pdf"
 output="$work_dir/output.pdf"
 sandwich_output="$work_dir/output-sandwich.pdf"
-word_box_output="$work_dir/output-word-box.pdf"
 repeat_strip_input="$work_dir/repeat-strip-input.pdf"
 repeat_stripped="$work_dir/repeat-stripped.pdf"
 repeat_output="$work_dir/repeat-output.pdf"
@@ -85,20 +84,7 @@ ocrmypdf \
 	"$sandwich_output"
 qpdf --check "$sandwich_output"
 
-ocrmypdf \
-	--plugin src/ocrmypdf_progress_plugin.py \
-	--lossless-word-box-renderer \
-	--mode redo \
-	--output-type pdf \
-	--optimize 0 \
-	--pdf-renderer sandwich \
-	-l eng \
-	"$stripped" \
-	"$word_box_output"
-qpdf --check "$word_box_output"
-pdfinfo "$word_box_output" | grep -F "Lossless OCR word-box renderer"
-
-cp "$word_box_output" "$repeat_strip_input"
+cp "$sandwich_output" "$repeat_strip_input"
 ocrmypdf \
 	--plugin src/ocrmypdf_progress_plugin.py \
 	--lossless-clean-invisible-layers \
@@ -111,7 +97,6 @@ ocrmypdf \
 grep -Eq '"removedOCRFormInvocations":[1-9][0-9]*' "$work_dir/repeat-cleanup.log"
 ocrmypdf \
 	--plugin src/ocrmypdf_progress_plugin.py \
-	--lossless-word-box-renderer \
 	--mode redo \
 	--output-type pdf \
 	--optimize 0 \
@@ -123,7 +108,6 @@ qpdf --check "$repeat_output"
 "$ocrmypdf_python" tests/check_ocr_layers.py \
 	"$output" \
 	"$sandwich_output" \
-	"$word_box_output" \
 	"$repeat_output"
 
 input_pages="$(pdfinfo "$input" | awk '/^Pages:/ { print $2 }')"
@@ -142,25 +126,15 @@ NODE
 pdftotext "$stripped" "$work_dir/stripped.txt"
 pdftotext "$output" "$work_dir/output.txt"
 pdftotext "$sandwich_output" "$work_dir/sandwich-output.txt"
-pdftotext "$word_box_output" "$work_dir/word-box-output.txt"
 pdftotext "$repeat_output" "$work_dir/repeat-output.txt"
-pdftotext -bbox-layout "$output" "$work_dir/fpdf2-bbox.xml"
-pdftotext -bbox-layout "$sandwich_output" "$work_dir/sandwich-bbox.xml"
-pdftotext -bbox-layout "$word_box_output" "$work_dir/word-box-bbox.xml"
-python3 tests/check_selection_geometry.py \
-	"$work_dir/fpdf2-bbox.xml" \
-	"$work_dir/sandwich-bbox.xml" \
-	"$work_dir/word-box-bbox.xml"
 pdfimages -list "$stripped" > "$work_dir/stripped-images.txt"
 stripped_words="$(wc -w < "$work_dir/stripped.txt" | tr -d ' ')"
 output_words="$(wc -w < "$work_dir/output.txt" | tr -d ' ')"
 sandwich_words="$(wc -w < "$work_dir/sandwich-output.txt" | tr -d ' ')"
-word_box_words="$(wc -w < "$work_dir/word-box-output.txt" | tr -d ' ')"
 repeat_words="$(wc -w < "$work_dir/repeat-output.txt" | tr -d ' ')"
 test "$output_words" -gt "$stripped_words"
 test "$output_words" -ge 25
 test "$sandwich_words" -ge 25
-test "$word_box_words" -ge 25
 test "$repeat_words" -ge 25
 
 cp "$work_dir/born-digital.pdf" "$work_dir/born-digital-strip-input.pdf"
@@ -199,7 +173,6 @@ NODE
 pdftoppm -f 1 -singlefile -r 120 -png "$input" "$work_dir/input-render" >/dev/null 2>&1
 pdftoppm -f 1 -singlefile -r 120 -png "$output" "$work_dir/output-render" >/dev/null 2>&1
 pdftoppm -f 1 -singlefile -r 120 -png "$sandwich_output" "$work_dir/sandwich-render" >/dev/null 2>&1
-pdftoppm -f 1 -singlefile -r 120 -png "$word_box_output" "$work_dir/word-box-render" >/dev/null 2>&1
 pdftoppm -f 1 -singlefile -r 120 -png "$repeat_output" "$work_dir/repeat-render" >/dev/null 2>&1
 python3 tests/compare_renders.py \
 	"$work_dir/input-render.png" \
@@ -209,14 +182,10 @@ python3 tests/compare_renders.py \
 	"$work_dir/sandwich-render.png"
 python3 tests/compare_renders.py \
 	"$work_dir/input-render.png" \
-	"$work_dir/word-box-render.png"
-python3 tests/compare_renders.py \
-	"$work_dir/input-render.png" \
 	"$work_dir/repeat-render.png"
 
-printf 'end-to-end PDF test passed (%s stripped -> %s fpdf2, %s sandwich, %s word-box, %s repeated words)\n' \
+printf 'end-to-end PDF test passed (%s stripped -> %s fpdf2, %s sandwich, %s repeated sandwich words)\n' \
 	"$stripped_words" \
 	"$output_words" \
 	"$sandwich_words" \
-	"$word_box_words" \
 	"$repeat_words"

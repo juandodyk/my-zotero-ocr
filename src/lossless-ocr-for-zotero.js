@@ -377,10 +377,11 @@ LosslessOCRForZotero = {
 		const language = LosslessOCRCore.normalizeLanguage(
 			this.getStringPref("language", "eng")
 		);
-		const pdfRenderer = LosslessOCRCore.normalizePDFRenderer(
-			this.getStringPref("pdfRenderer", "fpdf2")
-		);
-		const rendererLabel = LosslessOCRCore.describePDFRenderer(pdfRenderer);
+		const configuredRenderer = this.getStringPref("pdfRenderer", "fpdf2");
+		const pdfRenderer = LosslessOCRCore.normalizePDFRenderer(configuredRenderer);
+		if (pdfRenderer !== configuredRenderer) {
+			Zotero.Prefs.set("ocrmypdf.pdfRenderer", pdfRenderer);
+		}
 		losslessOCRLog("Selected PDF renderer: " + pdfRenderer);
 		const workDir = PathUtils.join(
 			PathUtils.tempDir,
@@ -441,7 +442,7 @@ LosslessOCRForZotero = {
 			}
 
 			progress.update(
-				"Running replacement OCR (" + rendererLabel + ")",
+				"Running replacement OCR (" + pdfRenderer + ")",
 				0.30
 			);
 			await this.runProcess({
@@ -468,8 +469,7 @@ LosslessOCRForZotero = {
 				outputTextPath,
 				tools,
 				workDir,
-				preflight,
-				pdfRenderer
+				preflight
 			});
 			progress.update("Validation passed", 0.86);
 
@@ -531,8 +531,7 @@ LosslessOCRForZotero = {
 		outputTextPath,
 		tools,
 		workDir,
-		preflight,
-		pdfRenderer
+		preflight
 	}) {
 		const [, outputInfo, outputText, inputStat, outputStat] = await this.awaitAll([
 			this.runProcess({
@@ -546,7 +545,6 @@ LosslessOCRForZotero = {
 			IOUtils.stat(outputPath)
 		]);
 		LosslessOCRCore.compareGeometry(preflight.sourceInfo, outputInfo);
-		LosslessOCRCore.validatePDFRenderer(pdfRenderer, outputInfo);
 
 		const textAssessment = LosslessOCRCore.assessText({
 			pages: outputInfo.pages,

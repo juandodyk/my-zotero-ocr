@@ -37,7 +37,7 @@ confirmation before replacement.
 During processing, Zotero shows an in-window horizontal progress bar with the
 current stage and batch-aware percentage. It advances after each completed OCR
 page and displays the completed and total page counts. The OCR stage also names
-the renderer actually selected, such as `word boxes`.
+the renderer actually selected.
 
 Running the extension again is safe: it removes the existing removable
 invisible layers before creating one fresh OCR layer. Visible text such as
@@ -83,18 +83,9 @@ Choose the renderer in **Zotero Settings → Lossless OCR**:
   its selection boxes fit the printed lines more tightly, but OCRmyPDF
   documents word-selection issues in PDF.js and macOS Preview and no
   right-to-left support.
-- **word boxes** is the extension's experimental renderer for the tightest
-  Latin-text selection. It uses each word's hOCR bounding box and line
-  baseline, while retaining Tesseract's invisible Unicode PDF font. Tesseract
-  emits hOCR, text, and its PDF font in one OCR invocation, so this does not
-  run recognition twice. It adds no dependency beyond OCRmyPDF.
 
-`fpdf2` and `sandwich` are OCRmyPDF's built-in renderers. The word-box renderer
-is implemented by the extension's bundled OCRmyPDF plugin. It changes only the
-invisible text positioning; visible page content still comes untouched from
-the stripped source PDF. Before replacing an attachment, the extension verifies
-that OCRmyPDF stamped word-box output with the expected renderer identity. A
-silent fallback to `sandwich` is treated as a validation failure.
+Both choices are OCRmyPDF's maintained built-in renderers. For Latin-script
+scans, `sandwich` is often the better choice for text selection in Zotero.
 
 ## Requirements
 
@@ -118,7 +109,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 
 ## Install
 
-Download `lossless-ocr-for-zotero-1.5.1.xpi` from the latest GitHub release.
+Download `lossless-ocr-for-zotero-1.6.0.xpi` from the latest GitHub release.
 In Zotero, open **Tools → Plugins**, choose **Install Plugin From File**, and
 select the XPI.
 
@@ -133,10 +124,10 @@ npm test
 ```
 
 The end-to-end test creates a scanned fixture containing both visible footer
-text and stale invisible text, exercises all three renderers and a repeated
-word-box OCR run, checks that layers do not accumulate, compares selection-box
-geometry, validates PDF metadata and extracted text, and requires
-pixel-identical Poppler renders before and after OCR.
+text and stale invisible text, exercises both renderers and a repeated
+`sandwich` OCR run, checks that layers do not accumulate, validates PDF
+metadata and extracted text, and requires pixel-identical Poppler renders
+before and after OCR.
 
 The built XPI is written to `build/`.
 
