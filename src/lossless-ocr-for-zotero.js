@@ -6,7 +6,7 @@ function losslessOCRLog(message) {
 	Zotero.debug("Lossless OCR for Zotero: " + message);
 }
 
-function makeProgressWindow(window, message) {
+function makeProgressWindow(window, message, title = "Lossless OCR") {
 	const id = "lossless-ocr-for-zotero-progress";
 	const xhtml = "http://www.w3.org/1999/xhtml";
 	let controller;
@@ -39,7 +39,7 @@ function makeProgressWindow(window, message) {
 		].join(";");
 
 		const headline = doc.createElementNS(xhtml, "div");
-		headline.textContent = "Lossless OCR";
+		headline.textContent = title;
 		headline.style.cssText = "font-size: 14px; font-weight: 600; margin-bottom: 10px";
 
 		const bar = doc.createElementNS(xhtml, "progress");
@@ -145,17 +145,30 @@ LosslessOCRForZotero = {
 
 	addToWindow(window) {
 		const doc = window.document;
-		const id = "lossless-ocr-for-zotero-item-menu";
-		if (doc.getElementById(id)) return;
-
 		window.MozXULElement.insertFTLIfNeeded("lossless-ocr-for-zotero.ftl");
-		const menuitem = doc.createXULElement("menuitem");
-		menuitem.id = id;
-		menuitem.className = "menuitem-iconic";
-		menuitem.setAttribute("data-l10n-id", "lossless-ocr-for-zotero-menu-label");
-		menuitem.addEventListener("command", () => this.run(window));
-		doc.getElementById("zotero-itemmenu")?.appendChild(menuitem);
-		this.addedElementIDs.add(id);
+		const menu = doc.getElementById("zotero-itemmenu");
+		const entries = [
+			{
+				id: "lossless-ocr-for-zotero-item-menu",
+				l10n: "lossless-ocr-for-zotero-menu-label",
+				run: () => this.run(window)
+			},
+			{
+				id: "lossless-ocr-for-zotero-watermark-menu",
+				l10n: "lossless-ocr-for-zotero-watermark-menu-label",
+				run: () => this.runWatermarkRemoval(window)
+			}
+		];
+		for (const entry of entries) {
+			if (doc.getElementById(entry.id)) continue;
+			const menuitem = doc.createXULElement("menuitem");
+			menuitem.id = entry.id;
+			menuitem.className = "menuitem-iconic";
+			menuitem.setAttribute("data-l10n-id", entry.l10n);
+			menuitem.addEventListener("command", entry.run);
+			menu?.appendChild(menuitem);
+			this.addedElementIDs.add(entry.id);
+		}
 	},
 
 	addToAllWindows() {
@@ -250,7 +263,75 @@ LosslessOCRForZotero = {
 		}
 	},
 
-	async resolveJobs(selected, window) {
+	async runWatermarkRemoval(window) {
+		const progress = makeProgressWindow(
+			window,
+			"Checking PDF tools",
+			"PDF watermark removal"
+		);
+		const failures = [];
+		let completed = 0;
+		let skipped = 0;
+
+		try {
+			progress.update("Checking PDF tools", 1);
+			const tools = await this.findWatermarkTools();
+			progress.update("Reading selection", 3);
+			const selected = Zotero.getActiveZoteroPane().getSelectedItems();
+			const jobs = await this.resolveJobs(selected, window, { createParent: false });
+			if (!jobs.length) return;
+
+			for (let index = 0; index < jobs.length; index++) {
+				const job = jobs[index];
+				const jobProgress = progress.scope(index, jobs.length);
+				if (this.processingItemIDs.has(job.pdfItem.id)) {
+					failures.push(job.pdfItem.getDisplayTitle() + ": already being processed");
+					jobProgress.finish("Skipped PDF already being processed");
+					continue;
+				}
+
+				this.processingItemIDs.add(job.pdfItem.id);
+				try {
+					const result = await this.processWatermarkPDF({
+						...job,
+						tools,
+						progress: jobProgress,
+						window
+					});
+					if (result.status === "completed") completed++;
+					else skipped++;
+				}
+				catch (error) {
+					losslessOCRLog(error.stack || error);
+					jobProgress.finish("Watermark removal failed");
+					let message = job.pdfItem.getDisplayTitle() + ": " + error.message;
+					if (error.workDir) message += "\nWork files kept at: " + error.workDir;
+					failures.push(message);
+				}
+				finally {
+					this.processingItemIDs.delete(job.pdfItem.id);
+				}
+			}
+
+			progress.finish(completed + " cleaned, " + skipped + " unchanged");
+			if (failures.length) {
+				window.alert(
+					"Watermark removal completed " + completed + " PDF(s), left "
+					+ skipped + " unchanged, with " + failures.length + " failure(s):\n\n"
+					+ failures.join("\n\n")
+				);
+			}
+		}
+		catch (error) {
+			losslessOCRLog(error.stack || error);
+			window.alert("PDF watermark removal could not start:\n\n" + error.message);
+		}
+		finally {
+			setTimeout(() => progress.close(), failures.length ? 5000 : 1800);
+		}
+	},
+
+	async resolveJobs(selected, window, { createParent = true } = {}) {
 		if (!selected.length) {
 			window.alert("Select at least one Zotero item or PDF attachment.");
 			return [];
@@ -266,10 +347,10 @@ LosslessOCRForZotero = {
 				if (!this.isPDFAttachment(item) || LosslessOCRCore.isBackupAttachment(item)) {
 					continue;
 				}
-				if (item.isTopLevelItem()) {
+				if (item.isTopLevelItem() && createParent) {
 					await Zotero.getActiveZoteroPane().createEmptyParent(item);
 				}
-				parentItem = Zotero.Items.get(item.parentItemID);
+				parentItem = item.parentItemID ? Zotero.Items.get(item.parentItemID) : null;
 				pdfItem = item;
 			}
 			else {
@@ -352,6 +433,62 @@ LosslessOCRForZotero = {
 		return tools;
 	},
 
+	async findWatermarkTools() {
+		const tools = await this.findRequiredTools();
+		tools.pdftoppm = await this.findExecutable(
+			"pdftoppm",
+			PathUtils.parent(tools.ocrmypdf)
+		);
+		if (!tools.pdftoppm) {
+			throw new Error("pdftoppm is required to render-check cleaned PDFs but was not found.");
+		}
+		tools.python = await this.findOCRmyPDFPython(tools.ocrmypdf);
+		return tools;
+	},
+
+	async findOCRmyPDFPython(ocrmypdf) {
+		const candidates = [];
+		try {
+			const firstLine = (await IOUtils.readUTF8(ocrmypdf)).split(/\r?\n/, 1)[0];
+			if (firstLine.startsWith("#!")) {
+				const parts = firstLine.slice(2).trim().split(/\s+/);
+				if (parts[0] === "/usr/bin/env" && parts[1]) {
+					const resolved = await this.findExecutable(parts[1], PathUtils.parent(ocrmypdf));
+					if (resolved) candidates.push(resolved);
+				}
+				else if (parts[0]) {
+					candidates.push(parts[0]);
+				}
+			}
+		}
+		catch (error) {
+			losslessOCRLog("Could not inspect OCRmyPDF's Python shebang: " + error);
+		}
+
+		for (const name of ["python3", "python"]) {
+			const candidate = await this.findExecutable(name, PathUtils.parent(ocrmypdf));
+			if (candidate) candidates.push(candidate);
+		}
+		for (const candidate of [...new Set(candidates)]) {
+			if (!await IOUtils.exists(candidate)) continue;
+			try {
+				await this.runProcess({
+					command: candidate,
+					arguments: ["-c", "import pikepdf; print(pikepdf.__version__)"],
+					workDir: PathUtils.tempDir
+				});
+				return candidate;
+			}
+			catch (error) {
+				losslessOCRLog("Python candidate lacks pikepdf: " + candidate);
+			}
+		}
+		throw new Error(
+			"Could not find OCRmyPDF's Python interpreter with pikepdf installed. "
+			+ "Reinstall OCRmyPDF or set a valid OCRmyPDF path in the extension preferences."
+		);
+	},
+
 	async findExecutable(name, preferredDirectory = "") {
 		const executable = Zotero.isWin ? name + ".exe" : name;
 		const candidates = [
@@ -366,6 +503,266 @@ LosslessOCRForZotero = {
 			if (await IOUtils.exists(candidate)) return candidate;
 		}
 		return "";
+	},
+
+	async processWatermarkPDF({ parentItem, pdfItem, tools, progress, window }) {
+		const sourcePath = await pdfItem.getFilePathAsync();
+		if (!sourcePath || !await IOUtils.exists(sourcePath)) {
+			throw new Error("The attachment file could not be found on disk.");
+		}
+
+		const workDir = PathUtils.join(
+			PathUtils.tempDir,
+			"watermark-zotero-" + Date.now() + "-" + Math.random().toString(36).slice(2)
+		);
+		const helperPath = PathUtils.join(workDir, "watermark_surgeon.py");
+		const outputPath = PathUtils.join(workDir, "cleaned.pdf");
+		const sourceTextPath = PathUtils.join(workDir, "source.txt");
+		const outputTextPath = PathUtils.join(workDir, "cleaned.txt");
+		const filename = pdfItem.attachmentFilename || PathUtils.filename(sourcePath);
+		const baseName = filename.replace(/\.pdf$/i, "");
+		const replacementPath = PathUtils.join(
+			PathUtils.parent(sourcePath),
+			"." + filename + ".watermark-removal-" + Date.now() + ".tmp"
+		);
+		let safeToClean = false;
+
+		await IOUtils.makeDirectory(workDir);
+		try {
+			progress.update("Installing watermark detector", 0.03);
+			await this.installBundledScript("watermark_surgeon.py", helperPath);
+			progress.update("Scanning PDF structures", 0.08);
+			const scan = await this.scanWatermarks({
+				python: tools.python,
+				helperPath,
+				pdfPath: sourcePath,
+				workDir
+			});
+			if (scan.encrypted) {
+				throw new Error(
+					"This PDF is encrypted. The extension does not alter encrypted PDFs, "
+					+ "even when they can be opened without a password."
+				);
+			}
+			if (scan.signed) {
+				throw new Error(
+					"This PDF contains a digital signature. Removing anything would invalidate it, "
+					+ "so the file was left unchanged."
+				);
+			}
+			if (!scan.candidates.length) {
+				progress.finish("No high-confidence watermark found");
+				window.alert(
+					"No high-confidence removable watermark was found in:\n\n"
+					+ pdfItem.getDisplayTitle()
+					+ "\n\nThe detector intentionally leaves ambiguous repeated content unchanged."
+				);
+				safeToClean = true;
+				return { status: "skipped", scan };
+			}
+
+			const details = scan.candidates
+				.map((candidate, index) =>
+					(index + 1) + ". " + LosslessOCRCore.describeWatermarkCandidate(candidate)
+				)
+				.join("\n");
+			const proceed = window.confirm(
+				"The detector found the following high-confidence watermark content in:\n\n"
+				+ pdfItem.getDisplayTitle() + "\n\n" + details
+				+ "\n\nOnly those exact occurrences will be removed. The extension will first "
+				+ "validate a new PDF, then save the original as a backup attachment and "
+				+ "replace this attachment. Continue?"
+			);
+			if (!proceed) {
+				progress.finish("Watermark removal cancelled");
+				safeToClean = true;
+				return { status: "skipped", scan };
+			}
+
+			progress.update("Removing confirmed watermark", 0.20);
+			const candidateArguments = scan.candidates.flatMap(candidate => [
+				"--candidate", candidate.id
+			]);
+			const applyOutput = await this.runProcess({
+				command: tools.python,
+				arguments: [
+					helperPath,
+					"apply",
+					sourcePath,
+					outputPath,
+					...candidateArguments
+				],
+				workDir,
+				progress
+			});
+			const applied = this.parseHelperJSON(applyOutput, "watermark removal");
+			const expectedRemovals = scan.candidates.reduce(
+				(total, candidate) => total + (Number(candidate.occurrences) || 0),
+				0
+			);
+			if (applied.removed !== expectedRemovals) {
+				throw new Error(
+					"The helper removed " + applied.removed + " occurrence(s), but the confirmed "
+					+ "scan expected " + expectedRemovals + ". The source was left unchanged."
+				);
+			}
+
+			progress.update("Validating cleaned PDF", 0.45);
+			const validation = await this.validateWatermarkOutput({
+				sourcePath,
+				outputPath,
+				sourceTextPath,
+				outputTextPath,
+				tools,
+				helperPath,
+				candidates: scan.candidates,
+				workDir,
+				progress
+			});
+			progress.update("Saving original PDF backup", 0.88);
+			const backupOptions = {
+				file: sourcePath,
+				libraryID: pdfItem.libraryID,
+				title: "Original PDF backup (before watermark removal): " + baseName,
+				fileBaseName: baseName + " - watermarked original",
+				contentType: "application/pdf"
+			};
+			if (parentItem) backupOptions.parentItemID = parentItem.id;
+			await Zotero.Attachments.importFromFile(backupOptions);
+
+			progress.update("Replacing attachment", 0.94);
+			await IOUtils.copy(outputPath, replacementPath);
+			await IOUtils.move(replacementPath, sourcePath, { noOverwrite: false });
+			await this.refreshAndReindex(pdfItem, progress);
+			safeToClean = true;
+			progress.finish("Watermark removal complete");
+			losslessOCRLog(
+				"Removed " + applied.removed + " watermark occurrence(s) from " + sourcePath
+				+ "; " + validation.outputWords + " words remain"
+			);
+			return { status: "completed", scan, applied, validation };
+		}
+		catch (error) {
+			error.workDir = workDir;
+			throw error;
+		}
+		finally {
+			await Zotero.File.removeIfExists(replacementPath);
+			if (safeToClean) {
+				try {
+					await IOUtils.remove(workDir, { recursive: true });
+				}
+				catch (cleanupError) {
+					losslessOCRLog("Could not remove work directory " + workDir + ": " + cleanupError);
+				}
+			}
+		}
+	},
+
+	async scanWatermarks({ python, helperPath, pdfPath, workDir }) {
+		const output = await this.runProcess({
+			command: python,
+			arguments: [helperPath, "scan", pdfPath],
+			workDir
+		});
+		const report = this.parseHelperJSON(output, "watermark scan");
+		if (!Array.isArray(report.candidates) || !Number.isInteger(report.pages)) {
+			throw new Error("The watermark scanner returned an incomplete report.");
+		}
+		return report;
+	},
+
+	parseHelperJSON(output, operation) {
+		try {
+			return JSON.parse(String(output).trim());
+		}
+		catch (error) {
+			throw new Error("Could not parse the " + operation + " report.");
+		}
+	},
+
+	async validateWatermarkOutput({
+		sourcePath,
+		outputPath,
+		sourceTextPath,
+		outputTextPath,
+		tools,
+		helperPath,
+		candidates,
+		workDir,
+		progress
+	}) {
+		const renderDirectory = PathUtils.join(workDir, "rendered-cleaned-pages");
+		await IOUtils.makeDirectory(renderDirectory);
+		const [
+			,
+			sourceInfo,
+			outputInfo,
+			sourceText,
+			outputText,
+			sourceStat,
+			outputStat,
+			postScan
+		] = await this.awaitAll([
+			this.runProcess({
+				command: tools.qpdf,
+				arguments: ["--check", outputPath],
+				workDir
+			}),
+			this.readPDFInfo(tools.pdfinfo, sourcePath, workDir),
+			this.readPDFInfo(tools.pdfinfo, outputPath, workDir),
+			this.extractText(tools.pdftotext, sourcePath, sourceTextPath, workDir),
+			this.extractText(tools.pdftotext, outputPath, outputTextPath, workDir),
+			IOUtils.stat(sourcePath),
+			IOUtils.stat(outputPath),
+			this.scanWatermarks({
+				python: tools.python,
+				helperPath,
+				pdfPath: outputPath,
+				workDir
+			})
+		]);
+		LosslessOCRCore.compareGeometry(sourceInfo, outputInfo);
+		const textAssessment = LosslessOCRCore.assessWatermarkText({
+			inputText: sourceText,
+			outputText,
+			candidates,
+			pages: outputInfo.pages
+		});
+		const sizeAssessment = LosslessOCRCore.assessSize(sourceStat.size, outputStat.size);
+		const selectedIDs = new Set(candidates.map(candidate => candidate.id));
+		const surviving = postScan.candidates.filter(candidate => selectedIDs.has(candidate.id));
+		if (surviving.length) {
+			throw new Error("The cleaned PDF still contains a selected watermark candidate.");
+		}
+
+		progress.update("Rendering every cleaned page", 0.72);
+		await this.runProcess({
+			command: tools.pdftoppm,
+			arguments: [
+				"-r", "48", "-png", outputPath,
+				PathUtils.join(renderDirectory, "page")
+			],
+			workDir,
+			progress
+		});
+		const rendered = (await IOUtils.getChildren(renderDirectory))
+			.filter(path => /^page-\d+\.png$/i.test(PathUtils.filename(path)));
+		if (rendered.length !== outputInfo.pages) {
+			throw new Error(
+				"Rendered " + rendered.length + " of " + outputInfo.pages + " cleaned pages."
+			);
+		}
+		return {
+			...textAssessment,
+			...sizeAssessment,
+			renderedPages: rendered.length
+		};
+	},
+
+	async installBundledScript(filename, destinationPath) {
+		const source = await Zotero.File.getContentsFromURLAsync(this.rootURI + filename);
+		await IOUtils.writeUTF8(destinationPath, source);
 	},
 
 	async processPDF({ parentItem, pdfItem, tools, progress, window }) {

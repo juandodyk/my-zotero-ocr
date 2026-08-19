@@ -111,6 +111,35 @@ assert.equal(core.isBackupAttachment({
 	attachmentFilename: "paper.pdf",
 	getDisplayTitle: () => "Paper"
 }), false);
+assert.equal(core.isBackupAttachment({
+	attachmentFilename: "paper - watermarked original.pdf",
+	getDisplayTitle: () => "PDF"
+}), true);
+assert.equal(
+	core.describeWatermarkCandidate({
+		label: "repeated page text",
+		text: "DRAFT",
+		reason: "5/5 pages"
+	}),
+	"repeated page text \u201cDRAFT\u201d (5/5 pages)"
+);
+assert.deepEqual(core.assessWatermarkText({
+	inputText: "ordinary text DRAFT ordinary text DRAFT",
+	outputText: "ordinary text ordinary text",
+	candidates: [{ text: "DRAFT", occurrences: 2 }],
+	pages: 2
+}), {
+	inputWords: 6,
+	outputWords: 4,
+	expectedLoss: 2,
+	minimum: 2
+});
+assert.throws(() => core.assessWatermarkText({
+	inputText: Array.from({ length: 100 }, (_, i) => "word" + i).join(" "),
+	outputText: "only a few words",
+	candidates: [{ text: "DRAFT", occurrences: 1 }],
+	pages: 1
+}), /discarded too much extractable text/);
 
 const scannedImageList = [
 	"page   num  type   width height color comp bpc  enc interp  object ID x-ppi y-ppi size ratio",

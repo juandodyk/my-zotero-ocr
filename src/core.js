@@ -316,7 +316,36 @@ var LosslessOCRCore = (() => {
 		const filename = item?.attachmentFilename || "";
 		const title = item?.getDisplayTitle?.() || "";
 		return / - original(?: \d+)?\.pdf$/i.test(filename)
-			|| /^Original PDF backup \(before lossless OCR\):/i.test(title);
+			|| / - watermarked original(?: \d+)?\.pdf$/i.test(filename)
+			|| /^Original PDF backup \(before lossless OCR\):/i.test(title)
+			|| /^Original PDF backup \(before watermark removal\):/i.test(title);
+	}
+
+	function describeWatermarkCandidate(candidate) {
+		const text = String(candidate?.text || "").trim();
+		const quoted = text ? " \u201c" + text + "\u201d" : "";
+		return String(candidate?.label || candidate?.kind || "watermark")
+			+ quoted + " (" + String(candidate?.reason || "details unavailable") + ")";
+	}
+
+	function assessWatermarkText({ inputText, outputText, candidates, pages }) {
+		const inputWords = countWords(inputText);
+		const outputWords = countWords(outputText);
+		const expectedLoss = (candidates || []).reduce((total, candidate) => {
+			return total
+				+ countWords(candidate.text)
+				* Math.max(0, Number(candidate.occurrences) || 0);
+		}, 0);
+		const tolerance = Math.max(2, Math.ceil((Number(pages) || 0) / 2));
+		const minimum = Math.max(0, inputWords - expectedLoss - tolerance);
+		if (outputWords < minimum) {
+			throw new Error(
+				"Watermark removal discarded too much extractable text: "
+				+ inputWords + " words before, " + outputWords + " after; at least "
+				+ minimum + " were expected to remain."
+			);
+		}
+		return { inputWords, outputWords, expectedLoss, minimum };
 	}
 
 	return {
@@ -335,7 +364,9 @@ var LosslessOCRCore = (() => {
 		assessText,
 		assessSize,
 		formatBytes,
-		isBackupAttachment
+		isBackupAttachment,
+		describeWatermarkCandidate,
+		assessWatermarkText
 	};
 })();
 
