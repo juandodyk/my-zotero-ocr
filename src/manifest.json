@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "name": "Lossless OCR for Zotero",
-  "version": "1.6.0",
-  "description": "Replace stale OCR in scanned Zotero PDFs without re-rendering their visible pages.",
+  "version": "1.7.0",
+  "description": "Replace stale OCR and conservatively remove detected watermarks from Zotero PDFs.",
   "author": "Juan Dodyk",
   "homepage_url": "https://github.com/juandodyk/my-zotero-ocr",
   "applications": {
