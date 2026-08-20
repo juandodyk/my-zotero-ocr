@@ -53,6 +53,44 @@ def make_form_watermark(path: Path) -> None:
     pdf.save()
 
 
+def make_vector_form_watermark(path: Path) -> None:
+    pdf = canvas.Canvas(str(path), pagesize=letter)
+    pdf.beginForm("vector-watermark", 0, 0, 36, 17)
+    pdf.setFillColor(Color(0.35, 0.35, 0.35))
+    pdf.rect(0, 9, 11, 8, fill=1, stroke=0)
+    pdf.rect(13, 9, 10, 8, fill=1, stroke=0)
+    pdf.rect(25, 9, 11, 8, fill=1, stroke=0)
+    pdf.rect(2, 0, 32, 6, fill=1, stroke=0)
+    pdf.endForm()
+    for page in range(1, 6):
+        body(pdf, page)
+        pdf.saveState()
+        pdf.setFillAlpha(0.13)
+        pdf.translate(180, 330)
+        pdf.scale(7, 7)
+        pdf.doForm("vector-watermark")
+        pdf.restoreState()
+        pdf.showPage()
+    pdf.save()
+
+
+def make_legitimate_vector_repetition(path: Path) -> None:
+    pdf = canvas.Canvas(str(path), pagesize=letter)
+    pdf.beginForm("centerpiece", 0, 0, 36, 17)
+    pdf.setFillColor(Color(0.35, 0.35, 0.35))
+    pdf.rect(0, 0, 36, 17, fill=1, stroke=0)
+    pdf.endForm()
+    for page in range(1, 6):
+        body(pdf, page)
+        pdf.saveState()
+        pdf.translate(180, 330)
+        pdf.scale(7, 7)
+        pdf.doForm("centerpiece")
+        pdf.restoreState()
+        pdf.showPage()
+    pdf.save()
+
+
 def make_legitimate_repetition(path: Path) -> None:
     pdf = canvas.Canvas(str(path), pagesize=letter)
     for page in range(1, 6):
@@ -115,9 +153,11 @@ def main() -> None:
     destination.mkdir(parents=True, exist_ok=True)
     make_text_watermark(destination / "text-watermark.pdf")
     make_form_watermark(destination / "form-watermark.pdf")
+    make_vector_form_watermark(destination / "vector-form-watermark.pdf")
     make_image_watermark(destination / "image-watermark.pdf")
     make_mixed_form_uses(destination / "mixed-form-uses.pdf")
     make_legitimate_repetition(destination / "legitimate-repetition.pdf")
+    make_legitimate_vector_repetition(destination / "legitimate-vector-repetition.pdf")
 
 
 if __name__ == "__main__":

@@ -371,9 +371,13 @@ def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> 
             text = form_plain_text(obj) if subtype == "/Form" else ""
             keyword = bool(WATERMARK_WORDS.search(text))
             rotated = abs(angle_degrees(effective)) >= 10
+            # Some publishers draw an unrotated logo as vector outlines, so it
+            # has no searchable text. Very low opacity plus large, centered,
+            # repeated placement is the identifying signal in that case.
             eligible = centered and (
                 keyword
                 or (subtype == "/Form" and rotated and span >= 0.20)
+                or (subtype == "/Form" and span >= 0.20 and alpha <= 0.25)
                 or (subtype == "/Image" and rotated and span >= 0.20 and alpha <= 0.75)
             )
             kind = "form" if subtype == "/Form" else "image"

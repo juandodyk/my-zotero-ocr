@@ -1,6 +1,6 @@
 {
   "name": "lossless-ocr-for-zotero",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "private": true,
   "description": "Lossless OCR replacement and conservative watermark removal for Zotero PDFs",
   "scripts": {

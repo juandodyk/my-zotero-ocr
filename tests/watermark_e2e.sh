@@ -41,6 +41,14 @@ scan_and_apply() {
 	done
 	"$ocrmypdf_python" src/watermark_surgeon.py apply \
 		"$input" "$output" "$@" > "$work_dir/$name-apply.json"
+	"$ocrmypdf_python" src/watermark_surgeon.py scan "$output" > "$work_dir/$name-post-scan.json"
+	node -e '
+		const fs = require("node:fs");
+		const applied = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+		const postScan = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+		if (applied.removed < 1) throw new Error("watermark apply removed nothing");
+		if (postScan.candidates.length) throw new Error("watermark candidate survived removal");
+	' "$work_dir/$name-apply.json" "$work_dir/$name-post-scan.json"
 	qpdf --check "$output"
 	test "$(pdfinfo "$input" | awk '/^Pages:/ { print $2 }')" = \
 		"$(pdfinfo "$output" | awk '/^Pages:/ { print $2 }')"
@@ -56,6 +64,7 @@ scan_and_apply() {
 
 scan_and_apply text
 scan_and_apply form
+scan_and_apply vector-form 1 'pattern-that-does-not-occur'
 scan_and_apply image 1 'REVIEW COPY'
 scan_and_apply annotation 1 'CONFIDENTIAL watermark'
 scan_and_apply optional-content 1 'DRAFT'
@@ -80,11 +89,17 @@ qpdf --check "$work_dir/mixed-clean.pdf"
 
 "$ocrmypdf_python" src/watermark_surgeon.py scan \
 	"$work_dir/legitimate-repetition.pdf" > "$work_dir/legitimate-scan.json"
+"$ocrmypdf_python" src/watermark_surgeon.py scan \
+	"$work_dir/legitimate-vector-repetition.pdf" > "$work_dir/legitimate-vector-scan.json"
 node -e '
 	const fs = require("node:fs");
-	const report = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-	if (report.candidates.length) throw new Error("legitimate repeated content was classified as a watermark");
-' "$work_dir/legitimate-scan.json"
+	for (const path of process.argv.slice(1)) {
+		const report = JSON.parse(fs.readFileSync(path, "utf8"));
+		if (report.candidates.length) {
+			throw new Error(`legitimate repeated content was classified as a watermark: ${path}`);
+		}
+	}
+' "$work_dir/legitimate-scan.json" "$work_dir/legitimate-vector-scan.json"
 
 "$ocrmypdf_python" src/watermark_surgeon.py scan \
 	"$work_dir/signed-watermark.pdf" > "$work_dir/signed-scan.json"
