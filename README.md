@@ -51,7 +51,8 @@ For the first eligible PDF under each selected bibliographic item, or for each
 directly selected PDF attachment, **Detect and remove PDF watermark...**:
 
 1. Scans without changing the PDF and reports only high-confidence candidates.
-2. Recognizes repeated page-stream text, direct Form XObjects, centered
+2. Recognizes repeated page-stream text, including text in shared blocks when
+   subsequent text positioning is independent, direct Form XObjects, centered
    low-opacity vector Form XObjects, repeated translucent diagonal image
    XObjects, keyword-named optional-content layers, and PDF watermark
    annotations.
@@ -142,7 +143,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 ## Install
 
 Run `./build.sh`, then in Zotero open **Tools → Plugins**, choose **Install
-Plugin From File**, and select `build/lossless-ocr-for-zotero-1.7.1.xpi`.
+Plugin From File**, and select `build/lossless-ocr-for-zotero-1.7.2.xpi`.
 Published releases provide the same versioned XPI on GitHub.
 
 This is a full replacement for the earlier local “OCRmyPDF for Zotero”

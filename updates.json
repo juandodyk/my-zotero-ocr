@@ -3,9 +3,9 @@
     "ocrmypdf-for-zotero@juandodyk.local": {
       "updates": [
         {
-          "version": "1.7.1",
-          "update_link": "https://github.com/juandodyk/my-zotero-ocr/releases/download/v1.7.1/lossless-ocr-for-zotero-1.7.1.xpi",
-          "update_hash": "sha256:b8a5cdc93c7a9e7aa7a176fa22499d8e151290f14a6cf88515ebb8cc9a56da0e",
+          "version": "1.7.2",
+          "update_link": "https://github.com/juandodyk/my-zotero-ocr/releases/download/v1.7.2/lossless-ocr-for-zotero-1.7.2.xpi",
+          "update_hash": "sha256:a8dc6ff538874fa500592e63588c0fd2eaa9f470604135f4dae79729fd4c1a0f",
           "applications": {
             "zotero": {
               "strict_min_version": "7.0.0",

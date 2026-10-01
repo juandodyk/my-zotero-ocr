@@ -55,6 +55,20 @@ def make_signed(source: Path, destination: Path) -> None:
         pdf.save(destination)
 
 
+def make_shared_text(source: Path, destination: Path, reset_position: bool) -> None:
+    with pikepdf.open(source) as pdf:
+        for page in pdf.pages:
+            positioning = b"1 0 0 1 72 650 Tm " if reset_position else b"0 -60 Td "
+            overlay = pdf.make_stream(
+                b"q BT /F1 48 Tf 0.84 0.95 1 rg "
+                b"0.623 -0.782 0.782 0.623 194 520 Tm "
+                b"(For Peer Review) Tj 0 g /F1 12 Tf " + positioning +
+                b"(Shared-block ordinary text must survive.) Tj ET Q\n"
+            )
+            page.obj[Name.Contents] = Array([overlay, page.obj[Name.Contents]])
+        pdf.save(destination)
+
+
 def make_encrypted(source: Path, destination: Path) -> None:
     with pikepdf.open(source) as pdf:
         pdf.save(
@@ -68,6 +82,8 @@ def main() -> None:
     clean = directory / "legitimate-repetition.pdf"
     make_annotation(clean, directory / "annotation-watermark.pdf")
     make_optional_content(clean, directory / "optional-content-watermark.pdf")
+    make_shared_text(clean, directory / "shared-text-watermark.pdf", True)
+    make_shared_text(clean, directory / "dependent-text.pdf", False)
     make_signed(directory / "text-watermark.pdf", directory / "signed-watermark.pdf")
     make_encrypted(directory / "text-watermark.pdf", directory / "encrypted-watermark.pdf")
 

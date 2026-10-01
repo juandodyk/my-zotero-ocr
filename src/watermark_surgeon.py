@@ -275,8 +275,21 @@ def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> 
             font_size = 0.0
             text_block = {"start": index, "shows": []}
         elif operator == "ET":
-            if text_block and len(text_block["shows"]) == 1:
-                occurrence = text_block["shows"][0]
+            for occurrence in text_block["shows"] if text_block else []:
+                if len(text_block["shows"]) > 1:
+                    # Dropping a show also drops its text advance. Shared
+                    # blocks are safe only when a later Tm resets positioning
+                    # before another show (or this is the final show).
+                    operation = occurrence.operation
+                    if str(instructions[operation].operator) not in ("Tj", "TJ"):
+                        continue
+                    following = instructions[operation + 1:index]
+                    if next(
+                        (str(item.operator) for item in following
+                         if str(item.operator) in TEXT_SHOW_OPERATORS | {"Tm"}),
+                        "Tm",
+                    ) != "Tm":
+                        continue
                 keyword = bool(WATERMARK_WORDS.search(occurrence.text))
                 occurrence.eligible = bool(
                     occurrence.text
