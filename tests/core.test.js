@@ -141,6 +141,28 @@ assert.throws(() => core.assessWatermarkText({
 	pages: 1
 }), /discarded too much extractable text/);
 
+const fragmentedWatermark = "rR ee rP Fo iew ev";
+const preservedBody = Array.from({ length: 100 }, (_, i) => "word" + i).join(" ");
+const fragmentedInput = [preservedBody, ...Array(10).fill(fragmentedWatermark)].join(" ");
+assert.equal(core.assessWatermarkText({
+	inputText: fragmentedInput,
+	outputText: preservedBody,
+	candidates: [{ text: "For Peer Review", occurrences: 10 }],
+	pages: 10
+}).expectedLoss, 60);
+assert.throws(() => core.assessWatermarkText({
+	inputText: fragmentedInput,
+	outputText: preservedBody.split(" ").slice(0, 50).join(" "),
+	candidates: [{ text: "For Peer Review", occurrences: 10 }],
+	pages: 10
+}), /discarded too much extractable text/);
+assert.throws(() => core.assessWatermarkText({
+	inputText: Array(100).fill("Fo").join(" "),
+	outputText: "",
+	candidates: [{ text: "For Peer Review", occurrences: 1 }],
+	pages: 1
+}), /discarded too much extractable text/);
+
 const scannedImageList = [
 	"page   num  type   width height color comp bpc  enc interp  object ID x-ppi y-ppi size ratio",
 	"--------------------------------------------------------------------------------------------",

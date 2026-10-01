@@ -55,7 +55,8 @@ directly selected PDF attachment, **Detect and remove PDF watermark...**:
    subsequent text positioning is independent, direct Form XObjects, centered
    low-opacity vector Form XObjects, repeated translucent diagonal image
    XObjects, keyword-named optional-content layers, and PDF watermark
-   annotations.
+   annotations. Repeated sequential line numbers in the left margin are
+   offered as a separate candidate.
 3. Shows the candidate type, any readable text, page coverage, angle, and
    opacity, then requires confirmation.
 4. Removes only the qualifying operations recorded during a verified rescan.
@@ -143,7 +144,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 ## Install
 
 Run `./build.sh`, then in Zotero open **Tools → Plugins**, choose **Install
-Plugin From File**, and select `build/lossless-ocr-for-zotero-1.7.2.xpi`.
+Plugin From File**, and select `build/lossless-ocr-for-zotero-1.7.3.xpi`.
 Published releases provide the same versioned XPI on GitHub.
 
 This is a full replacement for the earlier local “OCRmyPDF for Zotero”

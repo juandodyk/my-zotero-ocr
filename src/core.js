@@ -331,10 +331,42 @@ var LosslessOCRCore = (() => {
 	function assessWatermarkText({ inputText, outputText, candidates, pages }) {
 		const inputWords = countWords(inputText);
 		const outputWords = countWords(outputText);
+		// Rotated text may be extracted as several out-of-order fragments.
+		// Count disappearing fragments, bounded by the selected text's character
+		// inventory, rather than assuming its PDF string's word boundaries.
+		const compact = text => String(text || "").toLocaleLowerCase()
+			.replace(/[^\p{L}\p{N}]/gu, "");
+		const removedTokens = new Map();
+		for (const token of String(inputText || "").match(/\S+/g) || []) {
+			removedTokens.set(token, (removedTokens.get(token) || 0) + 1);
+		}
+		for (const token of String(outputText || "").match(/\S+/g) || []) {
+			removedTokens.set(token, (removedTokens.get(token) || 0) - 1);
+		}
 		const expectedLoss = (candidates || []).reduce((total, candidate) => {
-			return total
-				+ countWords(candidate.text)
-				* Math.max(0, Number(candidate.occurrences) || 0);
+			const occurrences = Math.max(0, Number(candidate.occurrences) || 0);
+			const text = compact(candidate.text);
+			const budget = new Map();
+			for (const character of text) {
+				budget.set(character, (budget.get(character) || 0) + occurrences);
+			}
+			let fragments = 0;
+			for (const [token, count] of removedTokens) {
+				const fragment = compact(token);
+				if (count <= 0 || !fragment || !text.includes(fragment)) continue;
+				const required = new Map();
+				for (const character of fragment) {
+					required.set(character, (required.get(character) || 0) + 1);
+				}
+				const allowed = Math.min(count, ...Array.from(required,
+					([character, number]) => Math.floor((budget.get(character) || 0) / number)));
+				for (const [character, number] of required) {
+					budget.set(character, budget.get(character) - allowed * number);
+				}
+				removedTokens.set(token, count - allowed);
+				fragments += allowed;
+			}
+			return total + Math.max(countWords(candidate.text) * occurrences, fragments);
 		}, 0);
 		const tolerance = Math.max(2, Math.ceil((Number(pages) || 0) / 2));
 		const minimum = Math.max(0, inputWords - expectedLoss - tolerance);

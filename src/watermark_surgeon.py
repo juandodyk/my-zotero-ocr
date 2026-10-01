@@ -18,7 +18,7 @@ import math
 import re
 import sys
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -222,6 +222,9 @@ class Occurrence:
     angle: float = 0.0
     alpha: float = 1.0
     text: str = ""
+    x: float = 0.0
+    y: float = 0.0
+    size: float = 0.0
 
 
 @dataclass
@@ -247,9 +250,10 @@ def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> 
     visible_box = page_box(page)
     ctm = IDENTITY
     alpha = 1.0
-    graphics_stack: list[tuple[Matrix, float]] = []
+    graphics_stack: list[tuple[Matrix, float, float, float]] = []
     text_matrix = IDENTITY
     font_size = 0.0
+    leading = 0.0
     text_block: dict[str, Any] | None = None
     marked_stack: list[dict[str, Any]] = []
 
@@ -258,9 +262,10 @@ def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> 
         operator = str(instruction.operator)
 
         if operator == "q":
-            graphics_stack.append((ctm, alpha))
+            graphics_stack.append((ctm, alpha, font_size, leading))
         elif operator == "Q":
-            ctm, alpha = graphics_stack.pop() if graphics_stack else (IDENTITY, 1.0)
+            ctm, alpha, font_size, leading = (
+                graphics_stack.pop() if graphics_stack else (IDENTITY, 1.0, 0.0, 0.0))
         elif operator == "cm" and len(operands) == 6:
             ctm = matrix_multiply(ctm, as_matrix(operands))
         elif operator == "gs" and operands:
@@ -272,9 +277,27 @@ def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> 
                     alpha = 1.0
         elif operator == "BT":
             text_matrix = IDENTITY
-            font_size = 0.0
             text_block = {"start": index, "shows": []}
         elif operator == "ET":
+            if text_block:
+                left, bottom, right, top = visible_box
+                numbers = [o for o in text_block["shows"]
+                           if re.fullmatch(r"[1-9][0-9]*", o.text)
+                           and 0 < o.size <= 12 and abs(o.angle) <= 1
+                           and left <= o.x <= left + (right - left) * 0.05]
+                if (len(numbers) >= 20
+                        and numbers[-1] is text_block["shows"][-1]
+                        and all(str(instructions[o.operation].operator) == "Tj" for o in numbers)
+                        and [int(o.text) for o in numbers] == list(range(1, len(numbers) + 1))
+                        and max(o.x for o in numbers) - min(o.x for o in numbers) <= 2
+                        and bottom + (top - bottom) / 2 <= numbers[0].y <= top
+                        and all(4 <= a.y - b.y <= 24 for a, b in zip(numbers, numbers[1:]))):
+                    key = "margin-line-numbers:1-" + str(len(numbers))
+                    group = groups.setdefault(key, Group(
+                        key=key, kind="margin-line-numbers", text="1–" + str(len(numbers))))
+                    for occurrence in numbers:
+                        group.occurrences.append(replace(
+                            occurrence, kind="margin-line-numbers", eligible=True))
             for occurrence in text_block["shows"] if text_block else []:
                 if len(text_block["shows"]) > 1:
                     # Dropping a show also drops its text advance. Shared
@@ -319,10 +342,16 @@ def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> 
                 font_size = 0.0
         elif operator == "Tm" and len(operands) == 6:
             text_matrix = as_matrix(operands)
+        elif operator == "TL" and operands:
+            leading = float(operands[0])
+        elif operator == "T*":
+            text_matrix = matrix_multiply(text_matrix, (1, 0, 0, 1, 0, -leading))
         elif operator in ("Td", "TD") and len(operands) >= 2:
             try:
                 translation = (1.0, 0.0, 0.0, 1.0, float(operands[0]), float(operands[1]))
                 text_matrix = matrix_multiply(text_matrix, translation)
+                if operator == "TD":
+                    leading = -float(operands[1])
             except (TypeError, ValueError):
                 pass
         elif operator in TEXT_SHOW_OPERATORS and text_block is not None:
@@ -341,6 +370,9 @@ def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> 
                     alpha=alpha,
                     text=text,
                     eligible=effective_size >= 18,
+                    x=combined[4],
+                    y=combined[5],
+                    size=effective_size,
                 )
             )
         elif operator == "BDC" and len(operands) >= 2:
@@ -485,6 +517,7 @@ def candidate_from_group(group: Group, total_pages: int) -> dict[str, Any] | Non
         "image": "repeated image",
         "optional-content": "watermark layer",
         "annotation": "watermark annotation",
+        "margin-line-numbers": "left-margin line numbers",
     }
     reason = f"{len(pages)}/{total_pages} pages"
     if angles and any(abs(angle) >= 1 for angle in angles):

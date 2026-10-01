@@ -69,6 +69,17 @@ def make_shared_text(source: Path, destination: Path, reset_position: bool) -> N
         pdf.save(destination)
 
 
+def make_line_numbers(source: Path, destination: Path, x: int) -> None:
+    with pikepdf.open(source) as pdf:
+        for page in pdf.pages:
+            numbering = b"q BT /F1 10 Tf 1 0 0 1 200 770 Tm (Journal header) Tj "
+            numbering += f"1 0 0 1 {x} 740 Tm 12 TL (1) Tj ".encode()
+            numbering += b" ".join(f"T* ({n}) Tj".encode() for n in range(2, 61))
+            overlay = pdf.make_stream(numbering + b" ET Q\n")
+            page.obj[Name.Contents] = Array([overlay, page.obj[Name.Contents]])
+        pdf.save(destination)
+
+
 def make_encrypted(source: Path, destination: Path) -> None:
     with pikepdf.open(source) as pdf:
         pdf.save(
@@ -84,6 +95,8 @@ def main() -> None:
     make_optional_content(clean, directory / "optional-content-watermark.pdf")
     make_shared_text(clean, directory / "shared-text-watermark.pdf", True)
     make_shared_text(clean, directory / "dependent-text.pdf", False)
+    make_line_numbers(clean, directory / "line-number-watermark.pdf", 8)
+    make_line_numbers(clean, directory / "body-number-column.pdf", 200)
     make_signed(directory / "text-watermark.pdf", directory / "signed-watermark.pdf")
     make_encrypted(directory / "text-watermark.pdf", directory / "encrypted-watermark.pdf")
 
