@@ -20,6 +20,7 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Iterable, Sequence
 
 import pikepdf
@@ -31,7 +32,8 @@ TEXT_SHOW_OPERATORS = {"Tj", "TJ", "'", '"'}
 WATERMARK_WORDS = re.compile(
     r"(?:\bwatermark\b|\bdraft\b|\bconfidential\b|for\s+peer\s+review|"
     r"\bpreprint\b|\bproof\b|do\s+not\s+distribute|\bsample\b|"
-    r"uncorrected|review\s+copy)",
+    r"uncorrected|review\s+copy|unedited\s+manuscript|accepted\s+manuscript|"
+    r"author[’\']?s?\s+manuscript|not\s+for\s+distribution)",
     re.IGNORECASE,
 )
 
@@ -214,6 +216,7 @@ def document_has_signatures(pdf: pikepdf.Pdf) -> bool:
 class Occurrence:
     page: int
     kind: str
+    path: tuple[int, ...] = ()
     operation: int | None = None
     start: int | None = None
     end: int | None = None
@@ -225,6 +228,7 @@ class Occurrence:
     x: float = 0.0
     y: float = 0.0
     size: float = 0.0
+    lightness: float = 0.0
 
 
 @dataclass
@@ -241,16 +245,23 @@ class Group:
         return self.kind + "-" + digest[:12]
 
 
-def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> None:
+def scan_page(
+    page: pikepdf.Page, page_index: int, groups: dict[str, Group], *,
+    stream: Any = None, initial_matrix: Matrix = IDENTITY, initial_alpha: float = 1.0,
+    initial_lightness: float = 0.0,
+    path: tuple[int, ...] = (), ancestors: tuple[Any, ...] = (),
+) -> None:
     try:
-        instructions = pikepdf.parse_content_stream(page)
+        instructions = pikepdf.parse_content_stream(stream if stream is not None else page)
     except Exception as error:
         raise RuntimeError(f"Could not parse page {page_index + 1} content: {error}") from error
 
     visible_box = page_box(page)
-    ctm = IDENTITY
-    alpha = 1.0
-    graphics_stack: list[tuple[Matrix, float, float, float]] = []
+    ctm = initial_matrix
+    alpha = initial_alpha
+    render_mode = 0
+    lightness = initial_lightness
+    graphics_stack: list[tuple[Matrix, float, float, float, int, float]] = []
     text_matrix = IDENTITY
     font_size = 0.0
     leading = 0.0
@@ -262,19 +273,27 @@ def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> 
         operator = str(instruction.operator)
 
         if operator == "q":
-            graphics_stack.append((ctm, alpha, font_size, leading))
+            graphics_stack.append((ctm, alpha, font_size, leading, render_mode, lightness))
         elif operator == "Q":
-            ctm, alpha, font_size, leading = (
-                graphics_stack.pop() if graphics_stack else (IDENTITY, 1.0, 0.0, 0.0))
+            ctm, alpha, font_size, leading, render_mode, lightness = (
+                graphics_stack.pop() if graphics_stack else (initial_matrix, initial_alpha, 0.0, 0.0, 0, initial_lightness))
         elif operator == "cm" and len(operands) == 6:
             ctm = matrix_multiply(ctm, as_matrix(operands))
         elif operator == "gs" and operands:
             state = resolve_resource(page, "/ExtGState", operands[0])
             if state is not None:
                 try:
-                    alpha = min(float(state.get("/ca", 1)), float(state.get("/CA", 1)))
+                    alpha = float(state.get("/ca", alpha))
                 except Exception:
                     alpha = 1.0
+        elif operator == "g" and operands:
+            lightness = float(operands[0])
+        elif operator == "rg" and len(operands) == 3:
+            lightness = min(float(value) for value in operands)
+        elif operator == "k" and len(operands) == 4:
+            lightness = 1 - min(1, max(float(value) for value in operands[:3]) + float(operands[3]))
+        elif operator in ("cs", "sc", "scn"):
+            lightness = 0.0  # Unknown color spaces must not inherit pale RGB.
         elif operator == "BT":
             text_matrix = IDENTITY
             text_block = {"start": index, "shows": []}
@@ -314,20 +333,23 @@ def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> 
                     ) != "Tm":
                         continue
                 keyword = bool(WATERMARK_WORDS.search(occurrence.text))
+                # Large oblique lettering is a strong signal even when painted
+                # opaque gray. Exclude vertical chart labels and small running text.
+                oblique = 10 <= abs(occurrence.angle) <= 80
+                centered, span = location_metrics(
+                    (math.cos(math.radians(occurrence.angle)),
+                     math.sin(math.radians(occurrence.angle)),
+                     -math.sin(math.radians(occurrence.angle)),
+                     math.cos(math.radians(occurrence.angle)), occurrence.x, occurrence.y),
+                    (0, 0, len(occurrence.text) * occurrence.size * 0.45, occurrence.size),
+                    visible_box,
+                )
                 occurrence.eligible = bool(
-                    occurrence.text
-                    and (
-                        keyword
-                        and (
-                            occurrence.eligible
-                            or abs(occurrence.angle) >= 10
-                            or occurrence.alpha <= 0.95
-                        )
-                        or (
-                            occurrence.eligible
-                            and abs(occurrence.angle) >= 10
-                            and occurrence.alpha <= 0.95
-                        )
+                    occurrence.text and occurrence.eligible and (
+                        keyword and (oblique or occurrence.size >= 18 or occurrence.alpha <= 0.95)
+                        or occurrence.size >= 24 and centered and span >= 0.20
+                        and (oblique or occurrence.alpha <= 0.75 or occurrence.lightness >= 0.55)
+                        and abs(occurrence.angle) <= 80
                     )
                 )
                 key = "text:" + occurrence.text.casefold()
@@ -335,6 +357,8 @@ def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> 
                 group.explicit = keyword
                 group.occurrences.append(occurrence)
             text_block = None
+        elif operator == "Tr" and operands:
+            render_mode = int(operands[0])
         elif operator == "Tf" and len(operands) >= 2:
             try:
                 font_size = abs(float(operands[1]))
@@ -369,37 +393,51 @@ def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> 
                     angle=angle_degrees(combined),
                     alpha=alpha,
                     text=text,
-                    eligible=effective_size >= 18,
+                    eligible=render_mode in (0, 1, 2),
+                    path=path,
                     x=combined[4],
                     y=combined[5],
                     size=effective_size,
+                    lightness=lightness,
                 )
             )
         elif operator == "BDC" and len(operands) >= 2:
             name = ocg_name(page, operands[1])
+            properties = operands[1]
+            if isinstance(properties, pikepdf.Name):
+                properties = resolve_resource(page, "/Properties", properties)
+            artifact = (str(operands[0]) == "/Artifact" and isinstance(properties, pikepdf.Dictionary)
+                        and str(properties.get("/Subtype", "")) == "/Watermark")
             marked_stack.append({
                 "start": index,
                 "name": name,
-                "keyword": bool(WATERMARK_WORDS.search(name)),
+                "keyword": artifact or bool(WATERMARK_WORDS.search(name)),
+                "artifact": artifact,
             })
         elif operator == "BMC":
             marked_stack.append({"start": index, "name": "", "keyword": False})
         elif operator == "EMC" and marked_stack:
             marked = marked_stack.pop()
             if marked["keyword"]:
-                key = "ocg:" + marked["name"].casefold()
+                content_text = normalize_text(" ".join(
+                    shown_text(item.operands, str(item.operator))
+                    for item in instructions[marked["start"] + 1:index]
+                    if str(item.operator) in TEXT_SHOW_OPERATORS))
+                kind = "artifact" if marked.get("artifact") else "optional-content"
+                key = kind + ":" + (content_text if kind == "artifact" else marked["name"]).casefold()
                 group = groups.setdefault(
                     key,
-                    Group(key=key, kind="optional-content", text=marked["name"], explicit=True),
+                    Group(key=key, kind=kind, text=content_text or marked["name"], explicit=True),
                 )
                 group.occurrences.append(
                     Occurrence(
                         page=page_index,
-                        kind="optional-content",
+                        kind=kind,
+                        path=path,
                         start=marked["start"],
                         end=index,
                         eligible=True,
-                        text=marked["name"],
+                        text=content_text or marked["name"],
                     )
                 )
         elif operator == "Do" and operands:
@@ -414,6 +452,19 @@ def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> 
             local_box = obj.get("/BBox", [0, 0, 1, 1]) if subtype == "/Form" else [0, 0, 1, 1]
             centered, span = location_metrics(effective, local_box, visible_box)
             text = form_plain_text(obj) if subtype == "/Form" else ""
+            if subtype == "/Form":
+                identity = obj.objgen if obj.is_indirect else id(obj)
+                if identity not in ancestors and len(path) < 16:
+                    child = SimpleNamespace(obj={
+                        "/Resources": obj.get("/Resources", page.obj.get("/Resources", {})),
+                        "/CropBox": visible_box,
+                    })
+                    scan_page(child, page_index, groups, stream=obj,
+                              initial_matrix=effective, initial_alpha=alpha, initial_lightness=lightness,
+                              path=path + (index,), ancestors=ancestors + (identity,))
+                if text or not any(str(i.operator) in {"S", "s", "f", "F", "f*", "B", "B*", "b", "b*"}
+                                   for i in pikepdf.parse_content_stream(obj)):
+                    continue
             keyword = bool(WATERMARK_WORDS.search(text))
             rotated = abs(angle_degrees(effective)) >= 10
             # Some publishers draw an unrotated logo as vector outlines, so it
@@ -422,8 +473,9 @@ def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> 
             eligible = centered and (
                 keyword
                 or (subtype == "/Form" and rotated and span >= 0.20)
-                or (subtype == "/Form" and span >= 0.20 and alpha <= 0.25)
-                or (subtype == "/Image" and rotated and span >= 0.20 and alpha <= 0.75)
+                or (subtype == "/Form" and span >= 0.20 and alpha <= 0.50)
+                or (subtype == "/Image" and span >= 0.20
+                    and (alpha <= 0.50 or rotated and alpha <= 0.75))
             )
             kind = "form" if subtype == "/Form" else "image"
             key = kind + ":" + object_fingerprint(obj)
@@ -433,6 +485,7 @@ def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> 
                 Occurrence(
                     page=page_index,
                     kind=kind,
+                    path=path,
                     operation=index,
                     eligible=eligible,
                     angle=angle_degrees(effective),
@@ -441,7 +494,8 @@ def scan_page(page: pikepdf.Page, page_index: int, groups: dict[str, Group]) -> 
                 )
             )
 
-    scan_annotations(page, page_index, groups)
+    if not path:
+        scan_annotations(page, page_index, groups)
 
 
 def annotation_text(annotation: Any) -> str:
@@ -503,10 +557,8 @@ def candidate_from_group(group: Group, total_pages: int) -> dict[str, Any] | Non
     if not eligible:
         return None
     minimum_pages = 1 if group.explicit else min(2, total_pages)
-    minimum_coverage = 0.70 if total_pages > 1 else 1.0
     coverage = len(pages) / total_pages if total_pages else 0.0
-    eligible_fraction = len(eligible) / len(group.occurrences)
-    if len(pages) < minimum_pages or coverage < minimum_coverage or eligible_fraction < 0.70:
+    if len(pages) < minimum_pages:
         return None
 
     angles = [occurrence.angle for occurrence in eligible]
@@ -516,6 +568,7 @@ def candidate_from_group(group: Group, total_pages: int) -> dict[str, Any] | Non
         "form": "repeated form",
         "image": "repeated image",
         "optional-content": "watermark layer",
+        "artifact": "explicitly tagged watermark",
         "annotation": "watermark annotation",
         "margin-line-numbers": "left-margin line numbers",
     }
@@ -529,6 +582,7 @@ def candidate_from_group(group: Group, total_pages: int) -> dict[str, Any] | Non
         "kind": group.kind,
         "label": label_by_kind[group.kind],
         "text": group.text[:160],
+        "fullText": group.text,
         "pages": [page + 1 for page in pages],
         "pageCount": len(pages),
         "totalPages": total_pages,
@@ -545,13 +599,13 @@ def scan_document(pdf: pikepdf.Pdf) -> tuple[dict[str, Group], list[dict[str, An
 
     # A keyword-named optional-content group is the safer, more complete unit
     # to remove. Do not also present nested text/forms/images as duplicates.
-    ocg_ranges: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    ocg_ranges: dict[tuple[int, tuple[int, ...]], list[tuple[int, int]]] = defaultdict(list)
     for group in groups.values():
-        if group.kind != "optional-content":
+        if group.kind not in ("optional-content", "artifact"):
             continue
         for occurrence in group.occurrences:
             if occurrence.eligible and occurrence.start is not None and occurrence.end is not None:
-                ocg_ranges[occurrence.page].append((occurrence.start, occurrence.end))
+                ocg_ranges[(occurrence.page, occurrence.path)].append((occurrence.start, occurrence.end))
     for group in groups.values():
         if group.kind not in ("text", "form", "image"):
             continue
@@ -559,8 +613,9 @@ def scan_document(pdf: pikepdf.Pdf) -> tuple[dict[str, Group], list[dict[str, An
             if occurrence.operation is None:
                 continue
             if any(
-                start <= occurrence.operation <= end
-                for start, end in ocg_ranges.get(occurrence.page, [])
+                start <= operation <= end
+                for depth, operation in enumerate(occurrence.path + (occurrence.operation,))
+                for start, end in ocg_ranges.get((occurrence.page, occurrence.path[:depth]), [])
             ):
                 occurrence.eligible = False
 
@@ -580,7 +635,7 @@ def apply_candidates(pdf: pikepdf.Pdf, groups: dict[str, Group], selected_ids: s
     if missing:
         raise RuntimeError("Candidate IDs changed or disappeared: " + ", ".join(sorted(missing)))
 
-    removals: dict[int, dict[str, Any]] = defaultdict(
+    removals: dict[tuple[int, tuple[int, ...]], dict[str, Any]] = defaultdict(
         lambda: {"operations": set(), "ranges": [], "annotations": set()}
     )
     removed = 0
@@ -588,7 +643,7 @@ def apply_candidates(pdf: pikepdf.Pdf, groups: dict[str, Group], selected_ids: s
         for occurrence in group.occurrences:
             if not occurrence.eligible:
                 continue
-            target = removals[occurrence.page]
+            target = removals[(occurrence.page, occurrence.path)]
             if occurrence.operation is not None:
                 target["operations"].add(occurrence.operation)
             elif occurrence.start is not None and occurrence.end is not None:
@@ -597,32 +652,51 @@ def apply_candidates(pdf: pikepdf.Pdf, groups: dict[str, Group], selected_ids: s
                 target["annotations"].add(occurrence.annotation)
             removed += 1
 
-    for page_index, targets in removals.items():
-        page = pdf.pages[page_index]
-        if targets["operations"] or targets["ranges"]:
-            instructions = pikepdf.parse_content_stream(page)
+    def rewrite(container: Any, page_index: int, path: tuple[int, ...]) -> None:
+        targets = removals.get((page_index, path), {"operations": set(), "ranges": [], "annotations": set()})
+        instructions = pikepdf.parse_content_stream(container)
+        resources = container.obj.get("/Resources", {}) if not path else container.get("/Resources", {})
+        resources_copy = pikepdf.Dictionary(resources)
+        xobjects = pikepdf.Dictionary(resources.get("/XObject", {}))
+        rewritten = []
+        for index, instruction in enumerate(instructions):
+            if index in targets["operations"] or any(a <= index <= b for a, b in targets["ranges"]):
+                continue
+            child_path = path + (index,)
+            if (str(instruction.operator) == "Do" and any(
+                    page == page_index and route[:len(child_path)] == child_path
+                    for page, route in removals)):
+                # Copy per invocation: shared Forms may also contain ordinary
+                # content at another position or on another page.
+                original = xobjects[instruction.operands[0]]
+                clone = pdf.make_stream(original.read_bytes())
+                for key, value in original.items():
+                    if str(key) not in ("/Length", "/Filter", "/DecodeParms"):
+                        clone[key] = value
+                if "/Resources" not in clone:
+                    clone["/Resources"] = resources
+                rewrite(clone, page_index, child_path)
+                name = pikepdf.Name("/WatermarkEdited" + str(index))
+                while name in xobjects:
+                    name = pikepdf.Name(str(name) + "x")
+                xobjects[name] = clone
+                instruction = pikepdf.ContentStreamInstruction([name], pikepdf.Operator("Do"))
+            rewritten.append(instruction)
+        resources_copy["/XObject"] = xobjects
+        data = pikepdf.unparse_content_stream(rewritten)
+        if path:
+            container.write(data)
+            container["/Resources"] = resources_copy
+        else:
+            container.obj["/Contents"] = pdf.make_stream(data)
+            container.obj["/Resources"] = resources_copy
+            if targets["annotations"]:
+                kept = [a for i, a in enumerate(container.obj.get("/Annots", []))
+                        if i not in targets["annotations"]]
+                container.obj["/Annots"] = pikepdf.Array(kept)
 
-            def should_drop(index: int) -> bool:
-                if index in targets["operations"]:
-                    return True
-                return any(start <= index <= end for start, end in targets["ranges"])
-
-            rewritten = [
-                instruction for index, instruction in enumerate(instructions) if not should_drop(index)
-            ]
-            page.obj["/Contents"] = pdf.make_stream(pikepdf.unparse_content_stream(rewritten))
-
-        if targets["annotations"]:
-            annotations = page.obj.get("/Annots", [])
-            kept = [
-                annotation
-                for index, annotation in enumerate(annotations)
-                if index not in targets["annotations"]
-            ]
-            if kept:
-                page.obj["/Annots"] = pikepdf.Array(kept)
-            elif "/Annots" in page.obj:
-                del page.obj["/Annots"]
+    for page_index in sorted({page for page, _ in removals}):
+        rewrite(pdf.pages[page_index], page_index, ())
     return removed
 
 

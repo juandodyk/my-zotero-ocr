@@ -134,6 +134,23 @@ assert.deepEqual(core.assessWatermarkText({
 	expectedLoss: 2,
 	minimum: 2
 });
+// Two watermark strings must not compete for the same letter fragments.
+assert.equal(core.assessWatermarkText({
+    inputText: "D R A F T Body text Downloaded from publisher",
+    outputText: "Body text",
+    candidates: [{ text: "Downloaded from publisher", occurrences: 1 },
+        { text: "DRAFT", occurrences: 1 }],
+    pages: 1
+}).expectedLoss, 8);
+
+// Display truncation must not reduce the validated watermark text budget.
+assert.equal(core.assessWatermarkText({
+    inputText: "Body text Downloaded from publisher by Example User on October 3 2026",
+    outputText: "Body text",
+    candidates: [{ text: "Downloaded from publisher", fullText: "Downloaded from publisher by Example User on October 3 2026", occurrences: 1 }],
+    pages: 1
+}).expectedLoss, 10);
+
 assert.throws(() => core.assessWatermarkText({
 	inputText: Array.from({ length: 100 }, (_, i) => "word" + i).join(" "),
 	outputText: "only a few words",

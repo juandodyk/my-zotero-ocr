@@ -62,6 +62,8 @@ scan_and_apply() {
 	test "$(find "$work_dir" -name "$name-render-*.png" | wc -l | tr -d ' ')" = 5
 }
 
+"$ocrmypdf_python" tests/watermark_regression.py "$work_dir"
+
 scan_and_apply text
 scan_and_apply shared-text 1 'For Peer Review'
 scan_and_apply line-number 1 '^([1-9]|[1-5][0-9]|60)$'

@@ -345,13 +345,17 @@ var LosslessOCRCore = (() => {
 		}
 		const expectedLoss = (candidates || []).reduce((total, candidate) => {
 			const occurrences = Math.max(0, Number(candidate.occurrences) || 0);
-			const text = compact(candidate.text);
+			const fullText = candidate.fullText ?? candidate.text;
+			const text = compact(fullText);
 			const budget = new Map();
 			for (const character of text) {
 				budget.set(character, (budget.get(character) || 0) + occurrences);
 			}
 			let fragments = 0;
-			for (const [token, count] of removedTokens) {
+			// Allocate whole words before single-letter fragments shared by
+			// different watermark strings (e.g. a download notice and overlay).
+			for (const [token, count] of [...removedTokens].sort(
+				(a, b) => compact(b[0]).length - compact(a[0]).length)) {
 				const fragment = compact(token);
 				if (count <= 0 || !fragment || !text.includes(fragment)) continue;
 				const required = new Map();
@@ -366,7 +370,7 @@ var LosslessOCRCore = (() => {
 				removedTokens.set(token, count - allowed);
 				fragments += allowed;
 			}
-			return total + Math.max(countWords(candidate.text) * occurrences, fragments);
+			return total + Math.max(countWords(fullText) * occurrences, fragments);
 		}, 0);
 		const tolerance = Math.max(2, Math.ceil((Number(pages) || 0) / 2));
 		const minimum = Math.max(0, inputWords - expectedLoss - tolerance);
