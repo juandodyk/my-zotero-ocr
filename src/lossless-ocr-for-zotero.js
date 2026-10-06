@@ -707,6 +707,7 @@ LosslessOCRForZotero = {
 			this.runProcess({
 				command: tools.qpdf,
 				arguments: ["--check", outputPath],
+				acceptedExitCodes: [0, 3],
 				workDir
 			}),
 			this.readPDFInfo(tools.pdfinfo, sourcePath, workDir),
@@ -934,6 +935,7 @@ LosslessOCRForZotero = {
 			this.runProcess({
 				command: tools.qpdf,
 				arguments: ["--check", outputPath],
+				acceptedExitCodes: [0, 3],
 				workDir
 			}),
 			this.readPDFInfo(tools.pdfinfo, outputPath, workDir),
@@ -961,6 +963,7 @@ LosslessOCRForZotero = {
 			this.runProcess({
 				command: tools.qpdf,
 				arguments: ["--check", strippedPath],
+				acceptedExitCodes: [0, 3],
 				workDir
 			}),
 			this.readPDFInfo(tools.pdfinfo, sourcePath, workDir),
@@ -1026,7 +1029,10 @@ LosslessOCRForZotero = {
 		return LosslessOCRCore.parsePDFInfo(detailed);
 	},
 
-	async runProcess({ command, arguments: args, workDir, progress, onProgressEvent }) {
+	async runProcess({
+		command, arguments: args, workDir, progress, onProgressEvent,
+		acceptedExitCodes = [0]
+	}) {
 		losslessOCRLog("Running " + command + " " + args.map(this.quoteArgument).join(" "));
 		const proc = await Subprocess.call({
 			command,
@@ -1060,7 +1066,9 @@ LosslessOCRForZotero = {
 		if (progressBuffer) consumeProgressLine(progressBuffer);
 
 		const { exitCode } = await proc.wait();
-		if (exitCode !== 0) {
+		// qpdf --check reports warnings without errors as status 3. Callers
+		// opt in explicitly; every other command still requires status 0.
+		if (!acceptedExitCodes.includes(exitCode)) {
 			throw new Error(
 				PathUtils.filename(command) + " exited with code " + exitCode
 				+ ":\n" + this.trimProcessOutput(output)

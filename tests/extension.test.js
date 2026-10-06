@@ -105,4 +105,53 @@ assert.throws(
 extension.removeFromWindow(window);
 assert.equal(menu.children.every(item => item.removed), true);
 
-console.log("extension wiring tests passed");
+async function testProcessExitCodes() {
+	let exitCode = 0;
+	const warning = "WARNING: incorrect offset in outlines table\nqpdf: operation succeeded with warnings\n";
+	const logs = [];
+	context.Zotero.debug = message => logs.push(message);
+	context.PathUtils = {
+		filename: path => path.split("/").pop(),
+		parent: () => "/usr/bin"
+	};
+	context.Subprocess.getEnvironment = () => ({ PATH: "/usr/bin" });
+	context.Subprocess.call = async () => {
+		let read = false;
+		return {
+			stdout: {
+				async readString() {
+					if (read) return "";
+					read = true;
+					return warning;
+				}
+			},
+			async wait() { return { exitCode }; }
+		};
+	};
+	const check = {
+		command: "/usr/bin/qpdf", arguments: ["--check", "stripped.pdf"],
+		workDir: "/tmp", acceptedExitCodes: [0, 3]
+	};
+	assert.equal(await extension.runProcess(check), warning);
+	exitCode = 3;
+	assert.equal(await extension.runProcess(check), warning);
+	assert.ok(logs.some(message => message.includes(warning)), "warnings remain logged");
+	exitCode = 2;
+	await assert.rejects(extension.runProcess(check), /qpdf exited with code 2/);
+	exitCode = 1;
+	await assert.rejects(extension.runProcess(check), /qpdf exited with code 1/);
+	exitCode = 3;
+	await assert.rejects(extension.runProcess({
+		...check, acceptedExitCodes: undefined
+	}), /qpdf exited with code 3/);
+	await assert.rejects(extension.runProcess({
+		command: "/usr/bin/ocrmypdf", arguments: [], workDir: "/tmp"
+	}), /ocrmypdf exited with code 3/);
+}
+
+testProcessExitCodes().then(() => {
+	console.log("extension wiring and process exit tests passed");
+}).catch(error => {
+	console.error(error);
+	process.exitCode = 1;
+});

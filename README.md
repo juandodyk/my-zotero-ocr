@@ -32,6 +32,9 @@ directly selected PDF attachment, the extension:
 Keeping the attachment item in place preserves Zotero annotations, relations,
 and links to that attachment.
 
+qpdf warnings (including stale linearization hints) are logged and do not stop
+processing; qpdf errors still fail validation.
+
 If processing or a hard validation check fails, the source is not changed and
 the temporary work directory is retained. Soft text-quality warnings require
 confirmation before replacement.
@@ -148,7 +151,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 ## Install
 
 Run `./build.sh`, then in Zotero open **Tools → Plugins**, choose **Install
-Plugin From File**, and select `build/lossless-ocr-for-zotero-1.7.4.xpi`.
+Plugin From File**, and select `build/lossless-ocr-for-zotero-1.7.5.xpi`.
 Published releases provide the same versioned XPI on GitHub.
 
 This is a full replacement for the earlier local “OCRmyPDF for Zotero”
