@@ -1,5 +1,6 @@
 ChromeUtils.defineESModuleGetters(globalThis, {
-	Subprocess: "resource://gre/modules/Subprocess.sys.mjs"
+	Subprocess: "resource://gre/modules/Subprocess.sys.mjs",
+	NetUtil: "resource://gre/modules/NetUtil.sys.mjs"
 });
 
 function losslessOCRLog(message) {
@@ -762,7 +763,17 @@ LosslessOCRForZotero = {
 	},
 
 	async installBundledScript(filename, destinationPath) {
-		const source = await Zotero.File.getContentsFromURLAsync(this.rootURI + filename);
+		// Packaged jar: URLs are local resources; the HTTP loader can throw
+		// when it tries to read their unsupported nsIURI.username property.
+		// Use a channel directly because Zotero 7's getResourceAsync also
+		// delegates to the HTTP loader.
+		const channel = NetUtil.newChannel({
+			uri: this.rootURI + filename,
+			loadUsingSystemPrincipal: true,
+			securityFlags: Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
+			contentPolicyType: Ci.nsIContentPolicy.TYPE_OTHER
+		});
+		const source = await Zotero.File.getContentsAsync(channel, "UTF-8");
 		await IOUtils.writeUTF8(destinationPath, source);
 	},
 
@@ -990,10 +1001,7 @@ LosslessOCRForZotero = {
 	},
 
 	async installProgressPlugin(destinationPath) {
-		const source = await Zotero.File.getContentsFromURLAsync(
-			this.rootURI + "ocrmypdf_progress_plugin.py"
-		);
-		await IOUtils.writeUTF8(destinationPath, source);
+		await this.installBundledScript("ocrmypdf_progress_plugin.py", destinationPath);
 	},
 
 	async extractText(pdftotext, inputPath, outputPath, workDir) {

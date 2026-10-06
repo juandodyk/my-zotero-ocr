@@ -149,7 +149,52 @@ async function testProcessExitCodes() {
 	}), /ocrmypdf exited with code 3/);
 }
 
-testProcessExitCodes().then(() => {
+async function testBundledResourceLoading() {
+	const loaded = [];
+	const written = [];
+	const rootURI = "jar:file:///profile/extensions/ocrmypdf-for-zotero@juandodyk.local.xpi!/";
+	extension.rootURI = rootURI;
+	context.Zotero.File = {
+		async getContentsFromURLAsync() {
+			throw new Error("NS_ERROR_FAILURE [nsIURI.username]");
+		},
+		async getContentsAsync(channel, charset) {
+			assert.equal(charset, "UTF-8");
+			return fs.readFileSync("src/" + channel.uri.slice(rootURI.length), "utf8");
+		}
+	};
+	context.Ci = {
+		nsILoadInfo: { SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL: 1 },
+		nsIContentPolicy: { TYPE_OTHER: 2 }
+	};
+	context.NetUtil = {
+		newChannel(options) {
+			assert.equal(options.loadUsingSystemPrincipal, true);
+			assert.equal(options.securityFlags, 1);
+			assert.equal(options.contentPolicyType, 2);
+			loaded.push(options.uri);
+			return options;
+		}
+	};
+	context.IOUtils = {
+		async writeUTF8(path, source) { written.push({ path, source }); }
+	};
+	await extension.installProgressPlugin("/tmp/progress.py");
+	await extension.installBundledScript("watermark_surgeon.py", "/tmp/watermark.py");
+	assert.deepEqual(loaded, [
+		rootURI + "ocrmypdf_progress_plugin.py",
+		rootURI + "watermark_surgeon.py"
+	]);
+	assert.deepEqual(written, [
+		{ path: "/tmp/progress.py", source: fs.readFileSync("src/ocrmypdf_progress_plugin.py", "utf8") },
+		{ path: "/tmp/watermark.py", source: fs.readFileSync("src/watermark_surgeon.py", "utf8") }
+	]);
+	context.Zotero.File.getContentsAsync = async () => { throw new Error("Missing resource"); };
+	await assert.rejects(extension.installProgressPlugin("/tmp/missing.py"), /Missing resource/);
+	assert.equal(written.length, 2, "failed resource reads must not write a helper");
+}
+
+Promise.resolve().then(testBundledResourceLoading).then(testProcessExitCodes).then(() => {
 	console.log("extension wiring and process exit tests passed");
 }).catch(error => {
 	console.error(error);
