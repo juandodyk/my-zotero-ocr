@@ -1,6 +1,6 @@
 # Lossless OCR for Zotero
 
-A small Zotero 7-9 extension that replaces stale OCR in scanned PDFs and
+A small Zotero 7-10 extension that replaces stale OCR in scanned PDFs and
 conservatively detects and removes common PDF watermarks while preserving the
 rest of the document.
 
@@ -128,7 +128,7 @@ scans, `sandwich` is often the better choice for text selection in Zotero.
 
 ## Requirements
 
-- Zotero 7, 8, or 9
+- Zotero 7, 8, 9, or 10
 - [OCRmyPDF 17.6 or newer](https://ocrmypdf.readthedocs.io/) with Tesseract
 - `qpdf`, `pdfinfo`, `pdftotext`, `pdfimages`, and `pdftoppm` for preflight
   detection and pre-replacement validation
@@ -151,7 +151,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 ## Install
 
 Run `./build.sh`, then in Zotero open **Tools → Plugins**, choose **Install
-Plugin From File**, and select `build/lossless-ocr-for-zotero-1.7.5.xpi`.
+Plugin From File**, and select `build/lossless-ocr-for-zotero-1.7.6.xpi`.
 Published releases provide the same versioned XPI on GitHub.
 
 This is a full replacement for the earlier local “OCRmyPDF for Zotero”
