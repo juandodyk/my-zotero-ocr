@@ -68,6 +68,7 @@ scan_and_apply text
 scan_and_apply shared-text 1 'For Peer Review'
 scan_and_apply line-number 1 '^([1-9]|[1-5][0-9]|60)$'
 scan_and_apply form-line-number 1 '^([1-9]|[1-5][0-9]|6[0-5])$'
+scan_and_apply submission-footer 1 'Editorial Manager|Aries Systems'
 test "$(grep -c 'Journal header' "$work_dir/line-number-clean.txt")" = 5
 test "$(grep -c 'Shared-block ordinary text must survive' "$work_dir/shared-text-clean.txt")" = 5
 "$ocrmypdf_python" src/watermark_surgeon.py scan \
@@ -76,12 +77,12 @@ node -e '
 	const report = require(process.argv[1]);
 	if (report.candidates.length) throw new Error("position-dependent shared text must be retained");
 ' "$(pwd)/$work_dir/dependent-scan.json"
-for name in body-number-column form-body-number-column; do
+for name in body-number-column form-body-number-column submission-credit-in-body; do
 	"$ocrmypdf_python" src/watermark_surgeon.py scan \
 		"$work_dir/$name.pdf" > "$work_dir/$name-scan.json"
 	node -e '
 		const report = require(process.argv[1]);
-		if (report.candidates.length) throw new Error("body number column must be retained");
+		if (report.candidates.length) throw new Error("ordinary body content must be retained");
 	' "$(pwd)/$work_dir/$name-scan.json"
 done
 scan_and_apply form

@@ -64,7 +64,8 @@ directly selected PDF attachment, **Detect and remove PDF watermark...**:
    watermark wording or explicit tags can qualify on a single page; other
    marks require repetition on at least two pages, with no coverage threshold. Repeated sequential line numbers in the left margin are
    offered as a separate candidate, whether they share one text block or each
-   number has its own, as in Editorial Manager review PDFs.
+   number has its own, as in Editorial Manager review PDFs. The Editorial Manager credit line is
+   offered when it appears as a small footer.
 3. Shows the candidate type, any readable text, page coverage, angle, and
    opacity, then requires confirmation.
 4. Removes only the qualifying operations recorded during a verified rescan.
@@ -152,7 +153,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 ## Install
 
 Run `./build.sh`, then in Zotero open **Tools → Plugins**, choose **Install
-Plugin From File**, and select `build/lossless-ocr-for-zotero-1.7.8.xpi`.
+Plugin From File**, and select `build/lossless-ocr-for-zotero-1.7.9.xpi`.
 Published releases provide the same versioned XPI on GitHub.
 
 This is a full replacement for the earlier local “OCRmyPDF for Zotero”

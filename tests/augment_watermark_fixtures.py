@@ -103,6 +103,17 @@ def make_form_line_numbers(source: Path, destination: Path, x: int) -> None:
         pdf.save(destination)
 
 
+def make_submission_footer(source: Path, destination: Path, y: int) -> None:
+    with pikepdf.open(source) as pdf:
+        for page in pdf.pages:
+            overlay = pdf.make_stream(
+                f"BT /F1 8 Tf 1 0 0 1 123 {y} Tm (Powered by Editorial Manager\\256 and "
+                "ProduXion Manager\\256 from Aries Systems Corporation) Tj ET\n".encode()
+            )
+            page.obj[Name.Contents] = Array([page.obj[Name.Contents], overlay])
+        pdf.save(destination)
+
+
 def make_encrypted(source: Path, destination: Path) -> None:
     with pikepdf.open(source) as pdf:
         pdf.save(
@@ -122,6 +133,8 @@ def main() -> None:
     make_line_numbers(clean, directory / "body-number-column.pdf", 200)
     make_form_line_numbers(clean, directory / "form-line-number-watermark.pdf", 18)
     make_form_line_numbers(clean, directory / "form-body-number-column.pdf", 200)
+    make_submission_footer(clean, directory / "submission-footer-watermark.pdf", 20)
+    make_submission_footer(clean, directory / "submission-credit-in-body.pdf", 400)
     make_signed(directory / "text-watermark.pdf", directory / "signed-watermark.pdf")
     make_encrypted(directory / "text-watermark.pdf", directory / "encrypted-watermark.pdf")
 

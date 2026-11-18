@@ -36,6 +36,11 @@ WATERMARK_WORDS = re.compile(
     r"author[’\']?s?\s+manuscript|not\s+for\s+distribution)",
     re.IGNORECASE,
 )
+SUBMISSION_SYSTEM_FOOTER = re.compile(
+    r"powered by editorial manager®? and produxion manager®? "
+    r"from aries systems corporation",
+    re.IGNORECASE,
+)
 
 
 def matrix_multiply(left: Matrix, right: Matrix) -> Matrix:
@@ -357,6 +362,13 @@ def scan_page(
                     ) != "Tm":
                         continue
                 keyword = bool(WATERMARK_WORDS.search(occurrence.text))
+                # A known submission-system credit is safe only as a small
+                # horizontal line at the foot of the page.
+                footer = bool(
+                    SUBMISSION_SYSTEM_FOOTER.fullmatch(occurrence.text)
+                    and occurrence.size <= 12 and abs(occurrence.angle) <= 1
+                    and occurrence.y <= visible_box[1] + 0.08 * (visible_box[3] - visible_box[1])
+                )
                 # Large oblique lettering is a strong signal even when painted
                 # opaque gray. Exclude vertical chart labels and small running text.
                 oblique = 10 <= abs(occurrence.angle) <= 80
@@ -370,7 +382,8 @@ def scan_page(
                 )
                 occurrence.eligible = bool(
                     occurrence.text and occurrence.eligible and (
-                        keyword and (oblique or occurrence.size >= 18 or occurrence.alpha <= 0.95)
+                        footer
+                        or keyword and (oblique or occurrence.size >= 18 or occurrence.alpha <= 0.95)
                         or occurrence.size >= 24 and centered and span >= 0.20
                         and (oblique or occurrence.alpha <= 0.75 or occurrence.lightness >= 0.55)
                         and abs(occurrence.angle) <= 80
@@ -378,7 +391,7 @@ def scan_page(
                 )
                 key = "text:" + occurrence.text.casefold()
                 group = groups.setdefault(key, Group(key=key, kind="text", text=occurrence.text))
-                group.explicit = keyword
+                group.explicit = keyword or footer
                 group.occurrences.append(occurrence)
             text_block = None
         elif operator == "Tr" and operands:
