@@ -328,6 +328,25 @@ var LosslessOCRCore = (() => {
 			+ quoted + " (" + String(candidate?.reason || "details unavailable") + ")";
 	}
 
+	function formatPageRanges(pages) {
+		const sorted = [...new Set((pages || []).map(Number))]
+			.filter(Number.isInteger)
+			.sort((a, b) => a - b);
+		const ranges = [];
+		for (const page of sorted) {
+			const last = ranges[ranges.length - 1];
+			if (last && last[1] === page - 1) last[1] = page;
+			else ranges.push([page, page]);
+		}
+		return ranges
+			.map(([first, last]) => first === last ? String(first) : first + "\u2013" + last)
+			.join(", ");
+	}
+
+	function isLikelyWatermark(candidate) {
+		return candidate?.confidence !== "possible";
+	}
+
 	function assessWatermarkText({ inputText, outputText, candidates, pages }) {
 		const inputWords = countWords(inputText);
 		const outputWords = countWords(outputText);
@@ -370,7 +389,10 @@ var LosslessOCRCore = (() => {
 				removedTokens.set(token, count - allowed);
 				fragments += allowed;
 			}
-			return total + Math.max(countWords(fullText) * occurrences, fragments);
+			// Text extraction may split a repeated line more finely than its
+			// PDF strings, so allow a margin on the scanner's own word count.
+			const scanned = Math.ceil((Number(candidate.expectedWords) || 0) * 1.25);
+			return total + Math.max(countWords(fullText) * occurrences, fragments, scanned);
 		}, 0);
 		const tolerance = Math.max(2, Math.ceil((Number(pages) || 0) / 2));
 		const minimum = Math.max(0, inputWords - expectedLoss - tolerance);
@@ -402,6 +424,8 @@ var LosslessOCRCore = (() => {
 		formatBytes,
 		isBackupAttachment,
 		describeWatermarkCandidate,
+		formatPageRanges,
+		isLikelyWatermark,
 		assessWatermarkText
 	};
 })();

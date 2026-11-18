@@ -552,36 +552,33 @@ LosslessOCRForZotero = {
 				);
 			}
 			if (!scan.candidates.length) {
-				progress.finish("No high-confidence watermark found");
+				progress.finish("No watermark or repeated content found");
 				window.alert(
-					"No high-confidence removable watermark was found in:\n\n"
+					"No watermark or repeated margin content was found in:\n\n"
 					+ pdfItem.getDisplayTitle()
-					+ "\n\nThe detector intentionally leaves ambiguous repeated content unchanged."
+					+ "\n\nMarks baked into scanned page images cannot be detected."
 				);
 				safeToClean = true;
 				return { status: "skipped", scan };
 			}
 
-			const details = scan.candidates
-				.map((candidate, index) =>
-					(index + 1) + ". " + LosslessOCRCore.describeWatermarkCandidate(candidate)
-				)
-				.join("\n");
-			const proceed = window.confirm(
-				"The detector found the following high-confidence watermark content in:\n\n"
-				+ pdfItem.getDisplayTitle() + "\n\n" + details
-				+ "\n\nOnly those exact occurrences will be removed. The extension will first "
-				+ "validate a new PDF, then save the original as a backup attachment and "
-				+ "replace this attachment. Continue?"
+			progress.update("Waiting for your selection", 0.12);
+			const selectedIDs = await this.chooseWatermarkCandidates(
+				window,
+				pdfItem.getDisplayTitle(),
+				scan.candidates
 			);
-			if (!proceed) {
+			const selected = scan.candidates.filter(
+				candidate => selectedIDs?.includes(candidate.id)
+			);
+			if (!selected.length) {
 				progress.finish("Watermark removal cancelled");
 				safeToClean = true;
 				return { status: "skipped", scan };
 			}
 
 			progress.update("Removing confirmed watermark", 0.20);
-			const candidateArguments = scan.candidates.flatMap(candidate => [
+			const candidateArguments = selected.flatMap(candidate => [
 				"--candidate", candidate.id
 			]);
 			const applyOutput = await this.runProcess({
@@ -597,7 +594,7 @@ LosslessOCRForZotero = {
 				progress
 			});
 			const applied = this.parseHelperJSON(applyOutput, "watermark removal");
-			const expectedRemovals = scan.candidates.reduce(
+			const expectedRemovals = selected.reduce(
 				(total, candidate) => total + (Number(candidate.occurrences) || 0),
 				0
 			);
@@ -616,7 +613,7 @@ LosslessOCRForZotero = {
 				outputTextPath,
 				tools,
 				helperPath,
-				candidates: scan.candidates,
+				candidates: selected,
 				workDir,
 				progress
 			});
@@ -658,6 +655,125 @@ LosslessOCRForZotero = {
 				}
 			}
 		}
+	},
+
+	chooseWatermarkCandidates(window, title, candidates) {
+		const doc = window.document;
+		const id = "lossless-ocr-for-zotero-watermark-dialog";
+		const make = (tag, style, text) => {
+			const element = doc.createElementNS("http://www.w3.org/1999/xhtml", tag);
+			if (style) element.style.cssText = style;
+			if (text !== undefined) element.textContent = text;
+			return element;
+		};
+		const buttonStyle = "padding: 6px 14px; border-radius: 6px; font: menu; "
+			+ "border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); ";
+
+		return new Promise(resolve => {
+			doc.getElementById(id)?.remove();
+			const overlay = make("div", "position: fixed; inset: 0; z-index: 2147483647; "
+				+ "display: flex; align-items: center; justify-content: center; padding: 24px; "
+				+ "box-sizing: border-box; background: rgba(0, 0, 0, 0.35); color-scheme: light dark");
+			overlay.id = id;
+			const panel = make("div", "display: flex; flex-direction: column; gap: 12px; "
+				+ "width: 620px; max-width: 100%; max-height: 100%; box-sizing: border-box; "
+				+ "padding: 18px; border-radius: 10px; background: Canvas; color: CanvasText; "
+				+ "box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3); font: menu");
+			panel.setAttribute("role", "dialog");
+			panel.setAttribute("aria-modal", "true");
+			panel.setAttribute("aria-label", "Choose content to remove");
+			panel.append(
+				make("div", "font-size: 15px; font-weight: 600", "Choose what to remove"),
+				make("div", "font-size: 12px; opacity: 0.75; overflow-wrap: anywhere", title)
+			);
+
+			const list = make("div", "display: flex; flex-direction: column; gap: 10px; "
+				+ "overflow-y: auto; min-height: 0");
+			const boxes = [];
+			const addSection = (heading, note, items) => {
+				if (!items.length) return;
+				list.append(make("div", "font-size: 13px; font-weight: 600; margin-top: 4px", heading));
+				if (note) list.append(make("div", "font-size: 12px; opacity: 0.75", note));
+				for (const candidate of items) {
+					const row = make("label", "display: flex; gap: 8px; align-items: flex-start; "
+						+ "font-size: 13px; cursor: default");
+					const box = make("input", "margin: 2px 0 0; flex: none");
+					box.type = "checkbox";
+					box.checked = LosslessOCRCore.isLikelyWatermark(candidate);
+					box.dataset.candidateId = candidate.id;
+					box.addEventListener("change", refresh);
+					boxes.push(box);
+					const body = make("div", "min-width: 0; overflow-wrap: anywhere");
+					const text = String(candidate.text || "").trim();
+					body.append(
+						make("div", "", text ? "\u201c" + text + "\u201d" : "(no readable text)"),
+						make("div", "font-size: 12px; opacity: 0.75", candidate.label
+							+ " \u00b7 pages " + LosslessOCRCore.formatPageRanges(candidate.pages)
+							+ " (" + candidate.pageCount + " of " + candidate.totalPages + ")")
+					);
+					row.append(box, body);
+					list.append(row);
+				}
+			};
+
+			const footer = make("div", "display: flex; flex-wrap: wrap; align-items: center; gap: 8px");
+			const note = make("div", "flex: 1 1 180px; font-size: 12px; opacity: 0.75",
+				"The original is kept as a backup attachment.");
+			const cancel = make("button", buttonStyle + "background: transparent; color: inherit",
+				"Cancel");
+			const confirm = make("button", buttonStyle
+				+ "background: AccentColor; color: AccentColorText");
+			cancel.type = confirm.type = "button";
+			footer.append(note, cancel, confirm);
+
+			function refresh() {
+				const count = boxes.filter(box => box.checked).length;
+				confirm.disabled = !count;
+				confirm.style.opacity = count ? "1" : "0.5";
+				confirm.textContent = "Remove selected (" + count + ")";
+			}
+			function finish(value) {
+				doc.removeEventListener("keydown", onKey, true);
+				window.removeEventListener("unload", onUnload);
+				overlay.remove();
+				resolve(value);
+			}
+			function onUnload() {
+				finish(null);
+			}
+			function onKey(event) {
+				if (event.key === "Escape") {
+					event.preventDefault();
+					event.stopPropagation();
+					finish(null);
+				}
+				else if (event.key === "Tab") {
+					const focusable = [...boxes, cancel, confirm].filter(item => !item.disabled);
+					const index = focusable.indexOf(doc.activeElement);
+					const step = event.shiftKey ? -1 : 1;
+					event.preventDefault();
+					focusable[(index + step + focusable.length) % focusable.length].focus();
+				}
+			}
+
+			addSection("Likely watermarks", "", candidates.filter(LosslessOCRCore.isLikelyWatermark));
+			addSection(
+				"Other repeated content",
+				"Often part of the document, such as running headers. Tick only what you want gone.",
+				candidates.filter(candidate => !LosslessOCRCore.isLikelyWatermark(candidate))
+			);
+			cancel.addEventListener("click", () => finish(null));
+			confirm.addEventListener("click", () => finish(
+				boxes.filter(box => box.checked).map(box => box.dataset.candidateId)
+			));
+			doc.addEventListener("keydown", onKey, true);
+			window.addEventListener("unload", onUnload);
+			refresh();
+			panel.append(list, footer);
+			overlay.append(panel);
+			doc.documentElement.append(overlay);
+			(confirm.disabled ? cancel : confirm).focus();
+		});
 	},
 
 	async scanWatermarks({ python, helperPath, pdfPath, workDir }) {

@@ -53,8 +53,12 @@ download footers is preserved.
 For the first eligible PDF under each selected bibliographic item, or for each
 directly selected PDF attachment, **Detect and remove PDF watermark...**:
 
-1. Scans without changing the PDF and reports only high-confidence candidates.
-2. Recognizes repeated page-stream text, including text in shared blocks when
+1. Scans without changing the PDF and looks for content that repeats at one
+   place across pages, judged by its real text or image and final position
+   rather than by how the PDF stores it. Text in margins, pale or diagonal text,
+   and margin images and graphics are compared this way, including text in
+   subset fonts whose codes change from page to page.
+2. Also recognizes repeated page-stream text, including text in shared blocks when
    subsequent text positioning is independent, direct Form XObjects, centered
    low-opacity vector Form XObjects, repeated translucent image XObjects,
    keyword-named optional-content layers, explicit watermark artifacts, and
@@ -66,8 +70,9 @@ directly selected PDF attachment, **Detect and remove PDF watermark...**:
    offered as a separate candidate, whether they share one text block or each
    number has its own, as in Editorial Manager review PDFs. The Editorial Manager credit line is
    offered when it appears as a small footer.
-3. Shows the candidate type, any readable text, page coverage, angle, and
-   opacity, then requires confirmation.
+3. Shows a checklist. Likely watermarks, such as download notices and
+   submission-system marks, start ticked. Other repeated content, such as
+   running headers, is listed unticked so nothing is removed unless you choose it.
 4. Removes only the qualifying operations recorded during a verified rescan.
    If a shared Form is also used elsewhere as ordinary content, that other
    invocation is retained.
@@ -78,11 +83,10 @@ directly selected PDF attachment, **Detect and remove PDF watermark...**:
    replaces the file behind the existing attachment, refreshes Zotero, and
    rebuilds its full-text index.
 
-Encrypted and digitally signed PDFs are left unchanged. Ambiguous repeated
-headers, logos, decorative content, and unrecognized
-watermark encodings are reported as no high-confidence match rather than
-guessed at. The menu wording deliberately says “detect” because no safe PDF
-tool can identify every possible watermark automatically.
+Encrypted and digitally signed PDFs are left unchanged. Marks baked into scanned
+page images, and stamps whose wording or position changes on every page, cannot
+be detected this way. The menu wording deliberately says “detect” because no
+safe PDF tool can identify every possible watermark automatically.
 
 ## Preservation recipe
 
@@ -153,7 +157,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 ## Install
 
 Run `./build.sh`, then in Zotero open **Tools → Plugins**, choose **Install
-Plugin From File**, and select `build/lossless-ocr-for-zotero-1.7.9.xpi`.
+Plugin From File**, and select `build/lossless-ocr-for-zotero-1.8.0.xpi`.
 Published releases provide the same versioned XPI on GitHub.
 
 This is a full replacement for the earlier local “OCRmyPDF for Zotero”

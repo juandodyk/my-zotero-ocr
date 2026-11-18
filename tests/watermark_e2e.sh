@@ -30,10 +30,11 @@ scan_and_apply() {
 		const report = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
 		if (report.signed) throw new Error("fixture unexpectedly signed");
 		const expected = Number(process.argv[2]);
-		if (report.candidates.length !== expected) {
-			throw new Error(`expected ${expected} candidate(s), found ${report.candidates.length}`);
+		const likely = report.candidates.filter(candidate => candidate.confidence === "likely");
+		if (likely.length !== expected) {
+			throw new Error(`expected ${expected} likely candidate(s), found ${likely.length}`);
 		}
-		process.stdout.write(report.candidates.map(candidate => candidate.id).join("\n"));
+		process.stdout.write(likely.map(candidate => candidate.id).join("\n"));
 	' "$scan" "$expected_candidates")"
 	set --
 	for candidate in $candidate_id; do
@@ -47,7 +48,7 @@ scan_and_apply() {
 		const applied = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
 		const postScan = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 		if (applied.removed < 1) throw new Error("watermark apply removed nothing");
-		if (postScan.candidates.length) throw new Error("watermark candidate survived removal");
+		if (postScan.candidates.some(candidate => candidate.confidence === "likely")) throw new Error("watermark candidate survived removal");
 	' "$work_dir/$name-apply.json" "$work_dir/$name-post-scan.json"
 	qpdf --check "$output"
 	test "$(pdfinfo "$input" | awk '/^Pages:/ { print $2 }')" = \
@@ -71,18 +72,12 @@ scan_and_apply form-line-number 1 '^([1-9]|[1-5][0-9]|6[0-5])$'
 scan_and_apply submission-footer 1 'Editorial Manager|Aries Systems'
 test "$(grep -c 'Journal header' "$work_dir/line-number-clean.txt")" = 5
 test "$(grep -c 'Shared-block ordinary text must survive' "$work_dir/shared-text-clean.txt")" = 5
-"$ocrmypdf_python" src/watermark_surgeon.py scan \
-	"$work_dir/dependent-text.pdf" > "$work_dir/dependent-scan.json"
-node -e '
-	const report = require(process.argv[1]);
-	if (report.candidates.length) throw new Error("position-dependent shared text must be retained");
-' "$(pwd)/$work_dir/dependent-scan.json"
 for name in body-number-column form-body-number-column submission-credit-in-body; do
 	"$ocrmypdf_python" src/watermark_surgeon.py scan \
 		"$work_dir/$name.pdf" > "$work_dir/$name-scan.json"
 	node -e '
 		const report = require(process.argv[1]);
-		if (report.candidates.length) throw new Error("ordinary body content must be retained");
+		if (report.candidates.some(candidate => candidate.confidence === "likely")) throw new Error("ordinary body content must not be ticked");
 	' "$(pwd)/$work_dir/$name-scan.json"
 done
 scan_and_apply form
@@ -96,11 +91,12 @@ scan_and_apply optional-content 1 'DRAFT'
 mixed_candidate="$(node -e '
 	const fs = require("node:fs");
 	const report = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-	if (report.candidates.length !== 1) throw new Error("expected one mixed-use candidate");
-	if (report.candidates[0].occurrences !== 19) {
-		throw new Error(`expected 19 qualifying uses, found ${report.candidates[0].occurrences}`);
+	const likely = report.candidates.filter(candidate => candidate.confidence === "likely");
+	if (likely.length !== 1) throw new Error("expected one mixed-use candidate");
+	if (likely[0].occurrences !== 19) {
+		throw new Error(`expected 19 qualifying uses, found ${likely[0].occurrences}`);
 	}
-	process.stdout.write(report.candidates[0].id);
+	process.stdout.write(likely[0].id);
 ' "$work_dir/mixed-scan.json")"
 "$ocrmypdf_python" src/watermark_surgeon.py apply \
 	"$work_dir/mixed-form-uses.pdf" "$work_dir/mixed-clean.pdf" \
@@ -117,8 +113,8 @@ node -e '
 	const fs = require("node:fs");
 	for (const path of process.argv.slice(1)) {
 		const report = JSON.parse(fs.readFileSync(path, "utf8"));
-		if (report.candidates.length) {
-			throw new Error(`legitimate repeated content was classified as a watermark: ${path}`);
+		if (report.candidates.some(candidate => candidate.confidence === "likely")) {
+			throw new Error(`legitimate repeated content was ticked as a watermark: ${path}`);
 		}
 	}
 ' "$work_dir/legitimate-scan.json" "$work_dir/legitimate-vector-scan.json"

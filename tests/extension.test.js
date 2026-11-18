@@ -194,7 +194,78 @@ async function testBundledResourceLoading() {
 	assert.equal(written.length, 2, "failed resource reads must not write a helper");
 }
 
-Promise.resolve().then(testBundledResourceLoading).then(testProcessExitCodes).then(() => {
+function makeDialogDocument() {
+	const listeners = new Map();
+	const walk = (node, found = []) => {
+		for (const child of node.children) {
+			found.push(child);
+			walk(child, found);
+		}
+		return found;
+	};
+	const root = { children: [], append(...items) { this.children.push(...items); } };
+	return {
+		root,
+		walk: () => walk(root),
+		activeElement: null,
+		documentElement: root,
+		getElementById: () => null,
+		addEventListener(name, listener) { listeners.set(name, listener); },
+		removeEventListener(name) { listeners.delete(name); },
+		key(event) { listeners.get("keydown")?.({ preventDefault() {}, stopPropagation() {}, ...event }); },
+		createElementNS(_, tag) {
+			const doc = this;
+			return {
+				tag, children: [], style: {}, dataset: {}, attributes: {}, handlers: {},
+				append(...items) { this.children.push(...items); },
+				setAttribute(name, value) { this.attributes[name] = value; },
+				addEventListener(name, listener) { this.handlers[name] = listener; },
+				focus() { doc.activeElement = this; },
+				remove() { root.children = root.children.filter(item => item !== this); }
+			};
+		}
+	};
+}
+
+async function testWatermarkChecklist() {
+	context.LosslessOCRCore = require("../src/core.js");
+	vm.runInContext("LosslessOCRCore = globalThis.LosslessOCRCore", context);
+	const candidates = [
+		{ id: "stamp", confidence: "likely", label: "repeated footer text", text: "Downloaded from x", pages: [1, 2, 3], pageCount: 3, totalPages: 3 },
+		{ id: "header", confidence: "possible", label: "repeated header text", text: "Journal", pages: [1, 3], pageCount: 2, totalPages: 3 }
+	];
+	const open = () => {
+		const doc = makeDialogDocument();
+		const dialogWindow = { document: doc, addEventListener() {}, removeEventListener() {} };
+		const result = extension.chooseWatermarkCandidates(dialogWindow, "Paper", candidates);
+		const nodes = doc.walk();
+		return {
+			doc, result,
+			boxes: nodes.filter(node => node.tag === "input"),
+			buttons: nodes.filter(node => node.tag === "button")
+		};
+	};
+
+	let dialog = open();
+	assert.deepEqual(dialog.boxes.map(box => box.checked), [true, false]);
+	assert.equal(dialog.buttons[1].textContent, "Remove selected (1)");
+	assert.equal(dialog.doc.activeElement, dialog.buttons[1]);
+	dialog.boxes[1].checked = true;
+	dialog.boxes[1].handlers.change();
+	assert.equal(dialog.buttons[1].textContent, "Remove selected (2)");
+	dialog.buttons[1].handlers.click();
+	assert.deepEqual([...await dialog.result], ["stamp", "header"]);
+	assert.equal(dialog.doc.root.children.length, 0, "the dialog closes");
+
+	dialog = open();
+	dialog.boxes[0].checked = false;
+	dialog.boxes[0].handlers.change();
+	assert.equal(dialog.buttons[1].disabled, true, "nothing selected disables removal");
+	dialog.doc.key({ key: "Escape" });
+	assert.equal(await dialog.result, null);
+}
+
+Promise.resolve().then(testBundledResourceLoading).then(testProcessExitCodes).then(testWatermarkChecklist).then(() => {
 	console.log("extension wiring and process exit tests passed");
 }).catch(error => {
 	console.error(error);

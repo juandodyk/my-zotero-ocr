@@ -158,6 +158,16 @@ assert.throws(() => core.assessWatermarkText({
 	pages: 1
 }), /discarded too much extractable text/);
 
+assert.equal(core.formatPageRanges([47, 4, 5, 6, 9, 9]), "4\u20136, 9, 47");
+assert.equal(core.isLikelyWatermark({ confidence: "likely" }), true);
+assert.equal(core.isLikelyWatermark({ confidence: "possible" }), false);
+assert.equal(core.assessWatermarkText({
+	inputText: "body a b c d e",
+	outputText: "body",
+	candidates: [{ text: "abc", occurrences: 1, expectedWords: 4 }],
+	pages: 1
+}).expectedLoss, 5);
+
 const fragmentedWatermark = "rR ee rP Fo iew ev";
 const preservedBody = Array.from({ length: 100 }, (_, i) => "word" + i).join(" ");
 const fragmentedInput = [preservedBody, ...Array(10).fill(fragmentedWatermark)].join(" ");
