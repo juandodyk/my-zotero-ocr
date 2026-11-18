@@ -245,6 +245,38 @@ class Group:
         return self.kind + "-" + digest[:12]
 
 
+def is_margin_number(
+    occurrence: Occurrence, visible_box: tuple[float, float, float, float]
+) -> bool:
+    left, _, right, _ = visible_box
+    return bool(
+        re.fullmatch(r"[1-9][0-9]*", occurrence.text)
+        and 0 < occurrence.size <= 12 and abs(occurrence.angle) <= 1
+        and left <= occurrence.x <= left + (right - left) * 0.05
+    )
+
+
+def add_line_number_column(
+    numbers: list[Occurrence],
+    visible_box: tuple[float, float, float, float],
+    groups: dict[str, Group],
+) -> None:
+    """Record ``numbers`` if they form one sequential column from the top half."""
+    _, bottom, _, top = visible_box
+    if not (len(numbers) >= 20
+            and [int(o.text) for o in numbers] == list(range(1, len(numbers) + 1))
+            and max(o.x for o in numbers) - min(o.x for o in numbers) <= 2
+            and bottom + (top - bottom) / 2 <= numbers[0].y <= top
+            and all(4 <= a.y - b.y <= 24 for a, b in zip(numbers, numbers[1:]))):
+        return
+    key = "margin-line-numbers:1-" + str(len(numbers))
+    group = groups.setdefault(key, Group(
+        key=key, kind="margin-line-numbers", text="1–" + str(len(numbers))))
+    for occurrence in numbers:
+        group.occurrences.append(replace(
+            occurrence, kind="margin-line-numbers", eligible=True))
+
+
 def scan_page(
     page: pikepdf.Page, page_index: int, groups: dict[str, Group], *,
     stream: Any = None, initial_matrix: Matrix = IDENTITY, initial_alpha: float = 1.0,
@@ -267,6 +299,7 @@ def scan_page(
     leading = 0.0
     text_block: dict[str, Any] | None = None
     marked_stack: list[dict[str, Any]] = []
+    separate_numbers: list[Occurrence] = []
 
     for index, instruction in enumerate(instructions):
         operands = instruction.operands
@@ -299,24 +332,15 @@ def scan_page(
             text_block = {"start": index, "shows": []}
         elif operator == "ET":
             if text_block:
-                left, bottom, right, top = visible_box
-                numbers = [o for o in text_block["shows"]
-                           if re.fullmatch(r"[1-9][0-9]*", o.text)
-                           and 0 < o.size <= 12 and abs(o.angle) <= 1
-                           and left <= o.x <= left + (right - left) * 0.05]
-                if (len(numbers) >= 20
-                        and numbers[-1] is text_block["shows"][-1]
-                        and all(str(instructions[o.operation].operator) == "Tj" for o in numbers)
-                        and [int(o.text) for o in numbers] == list(range(1, len(numbers) + 1))
-                        and max(o.x for o in numbers) - min(o.x for o in numbers) <= 2
-                        and bottom + (top - bottom) / 2 <= numbers[0].y <= top
-                        and all(4 <= a.y - b.y <= 24 for a, b in zip(numbers, numbers[1:]))):
-                    key = "margin-line-numbers:1-" + str(len(numbers))
-                    group = groups.setdefault(key, Group(
-                        key=key, kind="margin-line-numbers", text="1–" + str(len(numbers))))
-                    for occurrence in numbers:
-                        group.occurrences.append(replace(
-                            occurrence, kind="margin-line-numbers", eligible=True))
+                shows = text_block["shows"]
+                numbers = [o for o in shows
+                           if is_margin_number(o, visible_box)
+                           and str(instructions[o.operation].operator) == "Tj"]
+                if numbers and numbers[-1] is shows[-1]:
+                    add_line_number_column(numbers, visible_box, groups)
+                # Some submission systems give every number its own text block.
+                if len(shows) == 1 and numbers:
+                    separate_numbers.append(numbers[0])
             for occurrence in text_block["shows"] if text_block else []:
                 if len(text_block["shows"]) > 1:
                     # Dropping a show also drops its text advance. Shared
@@ -494,6 +518,7 @@ def scan_page(
                 )
             )
 
+    add_line_number_column(separate_numbers, visible_box, groups)
     if not path:
         scan_annotations(page, page_index, groups)
 

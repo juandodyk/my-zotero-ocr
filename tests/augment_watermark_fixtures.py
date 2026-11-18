@@ -80,6 +80,29 @@ def make_line_numbers(source: Path, destination: Path, x: int) -> None:
         pdf.save(destination)
 
 
+def make_form_line_numbers(source: Path, destination: Path, x: int) -> None:
+    """Mimic Editorial Manager: a shared Form with one text block per number."""
+    with pikepdf.open(source) as pdf:
+        data = b"".join(
+            f"/P << /MCID {n - 1} >> BDC BT /F1 1 Tf 10 0 0 10 {x} {750 - 11.34 * (n - 1):.2f} Tm "
+            f"( {n} ) Tj ET EMC\n".encode()
+            for n in range(1, 66)
+        )
+        form = pdf.make_stream(data)
+        form[Name.Type] = Name.XObject
+        form[Name.Subtype] = Name.Form
+        form[Name.BBox] = Array([0, 0, 612, 792])
+        form[Name.Resources] = pdf.pages[0].obj[Name.Resources]
+        form = pdf.make_indirect(form)
+        for page in pdf.pages:
+            resources = Dictionary(page.obj[Name.Resources])
+            resources[Name.XObject] = Dictionary(LineNumbers=form)
+            page.obj[Name.Resources] = resources
+            overlay = pdf.make_stream(b"q /LineNumbers Do Q\n")
+            page.obj[Name.Contents] = Array([page.obj[Name.Contents], overlay])
+        pdf.save(destination)
+
+
 def make_encrypted(source: Path, destination: Path) -> None:
     with pikepdf.open(source) as pdf:
         pdf.save(
@@ -97,6 +120,8 @@ def main() -> None:
     make_shared_text(clean, directory / "dependent-text.pdf", False)
     make_line_numbers(clean, directory / "line-number-watermark.pdf", 8)
     make_line_numbers(clean, directory / "body-number-column.pdf", 200)
+    make_form_line_numbers(clean, directory / "form-line-number-watermark.pdf", 18)
+    make_form_line_numbers(clean, directory / "form-body-number-column.pdf", 200)
     make_signed(directory / "text-watermark.pdf", directory / "signed-watermark.pdf")
     make_encrypted(directory / "text-watermark.pdf", directory / "encrypted-watermark.pdf")
 
