@@ -895,8 +895,33 @@ def geometry_top(page, fraction):
     return max(float(page.cropbox[1]), min(float(page.cropbox[3]), top - (fraction - .01) * (top - bottom)))
 
 
-def output_entries(pdf, output, selected):
+def outline_items(pdf, resolver):
+    def walk(nodes, depth=1):
+        for node in nodes:
+            destination = node.destination
+            if destination is None and node.action is not None and node.action.get("/S") == pikepdf.Name.GoTo:
+                destination = node.action.get("/D")
+            page, _ = resolver.resolve(destination)
+            yield node, page, depth
+            yield from walk(node.children, depth + 1)
+    return list(walk(pdf.open_outline(strict=True, max_depth=32).root))
+
+
+def save_verified_outline(pdf, output, expected):
     geometry = page_geometry(pdf)
+    # Save and verify in the destination directory, then publish without clobbering.
+    with tempfile.TemporaryDirectory(prefix=".bookmark-", dir=output.parent) as staging:
+        path = Path(staging) / "bookmarked.pdf"
+        pdf.save(path, fix_metadata_version=False)
+        with pikepdf.Pdf.open(path, attempt_recovery=False) as reopened:
+            actual = [(node.title, page, depth) for node, page, depth in outline_items(reopened, Destinations(reopened))]
+            if actual != expected or page_geometry(reopened) != geometry:
+                raise ValueError("The saved outline or page geometry failed verification.")
+        os.link(path, output)
+
+
+def output_entries(pdf, output, selected):
+    expected = []
     with pdf.open_outline(max_depth=32) as outline:
         stack = []
         for entry in selected:
@@ -911,28 +936,73 @@ def output_entries(pdf, output, selected):
                 item = pikepdf.OutlineItem(entry.title, entry.page)
             (stack[-1].children if stack else outline.root).append(item)
             stack.append(item)
+            expected.append((entry.title, entry.page, level))
+    save_verified_outline(pdf, output, expected)
 
-    def read_back(nodes, resolver, depth=1):
-        for node in nodes:
-            page, _ = resolver.resolve(node.destination)
-            yield node.title, page, depth
-            yield from read_back(node.children, resolver, depth + 1)
 
-    # Save and verify in the destination directory, then publish without clobbering.
-    with tempfile.TemporaryDirectory(prefix=".bookmark-", dir=output.parent) as staging:
-        path = Path(staging) / "bookmarked.pdf"
-        pdf.save(path, fix_metadata_version=False)
-        with pikepdf.Pdf.open(path, attempt_recovery=False) as reopened:
-            with reopened.open_outline(strict=True, max_depth=32) as outline:
-                actual = list(read_back(outline.root, Destinations(reopened)))
-            expected = []
-            depth = 0
-            for entry in selected:
-                depth = min(entry.level, depth + 1)
-                expected.append((entry.title, entry.page, depth))
-            if actual != expected or page_geometry(reopened) != geometry:
-                raise ValueError("The saved outline or page geometry failed verification.")
-        os.link(path, output)
+def refresh_outline(pdf, resolver, output, entries, choices, include_candidates):
+    existing = outline_items(pdf, resolver)
+    by_key = defaultdict(list)
+    for position, (node, page, depth) in enumerate(existing):
+        key = title_key(node.title)
+        if page is not None and key:
+            by_key[page, depth, key].append(position)
+
+    approved = select_entries(entries, choices)
+    if choices is None:
+        ids = [index for index, entry in enumerate(entries, 1) if entry.suggested and entry.page is not None]
+    else:
+        ids = sorted(choice["id"] for choice in choices)
+    # Validate that an existing and proposed title uniquely identify the same
+    # outline item. Use the extracted title for matching even after a manual edit.
+    matches = defaultdict(list)
+    for id_, proposed in zip(ids, approved):
+        source = entries[id_ - 1]
+        key = title_key(source.title)
+        positions = by_key[source.page, source.level, key]
+        if key and len(positions) == 1:
+            position = positions[0]
+            old_title = existing[position][0].title
+            old_number = TOC_NUMBERED.match(old_title) or PRINTED_CHAPTER.match(old_title)
+            new_number = TOC_NUMBERED.match(source.title) or PRINTED_CHAPTER.match(source.title)
+            if old_number and new_number and old_number[1] != new_number[1]:
+                continue
+            matches[position].append((id_, proposed))
+    titles = {}
+    changes = []
+    title_warnings = []
+    visible_ids = set()
+    for position, candidates in sorted(matches.items()):
+        if len(candidates) != 1:
+            continue
+        id_, entry = candidates[0]
+        old = existing[position][0].title
+        if entry.title != old and entry.title_review is None:
+            changes.append({"id": id_, "page": entry.page + 1, "oldTitle": old, "title": entry.title})
+            titles[position] = entry.title
+            visible_ids.add(id_)
+        if entry.title_review is not None:
+            title_warnings.append(old)
+            visible_ids.add(id_)
+
+    result = {"status": "preview" if output is None else "unchanged",
+              "count": len(changes), "changes": changes}
+    if title_warnings:
+        result["titleWarnings"] = title_warnings
+    if output is None or include_candidates:
+        result["candidates"] = [row for row in report_candidates(entries) if row["id"] in visible_ids]
+    if output is not None and changes:
+        expected = []
+        for position, (node, page, depth) in enumerate(existing):
+            title = titles.get(position, node.title)
+            if position in titles:
+                # Edit the existing dictionary directly, preserving the tree,
+                # named and external actions, styles, and exact view coordinates.
+                node.obj["/Title"] = pikepdf.String(title)
+            expected.append((title, page, depth))
+        save_verified_outline(pdf, output, expected)
+        result["status"] = "refreshed"
+    return result
 
 
 def select_entries(entries, choices):
@@ -981,10 +1051,13 @@ def generate(args):
     if output is not None and (output.exists() or output.is_symlink()):
         raise ValueError(f"Output already exists: {output}")
     with pikepdf.Pdf.open(path, attempt_recovery=False) as pdf:
-        if "/First" in pdf.Root.get("/Outlines", {}):
+        has_outline = "/First" in pdf.Root.get("/Outlines", {})
+        if has_outline and not args.refresh:
             return {"status": "existing", "count": 0}
         if pdf.is_encrypted or signed(pdf):
             return {"status": "protected", "count": 0}
+        if args.refresh and not has_outline:
+            return {"status": "no_outline", "count": 0}
         count = len(pdf.pages)
         front_end = min(count, FRONT_PAGES)
         pages = read_layout(path, 0, front_end - 1, args.pdftohtml)
@@ -1024,6 +1097,8 @@ def generate(args):
                 method = "headings"
                 entries = layout_headings(pages)
         choices = json.loads(Path(args.choices).read_text(encoding="utf-8")) if args.choices else None
+        if args.refresh:
+            return refresh_outline(pdf, resolver, output, entries, choices, args.candidates)
         selected = select_entries(entries, choices)
         unresolved = sum(entry.page is None for entry in entries)
         needs_review = choices is None and unresolved > 0
@@ -1044,6 +1119,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input")
     parser.add_argument("--output", help="New PDF path. Omit for a candidate preview.")
+    parser.add_argument("--refresh", action="store_true", help="Update uniquely matched titles in an existing outline.")
     parser.add_argument("--choices", help="JSON file containing reviewed candidate IDs and levels.")
     parser.add_argument("--candidates", action="store_true", help="Include candidates even when writing a PDF.")
     parser.add_argument("--language", default="eng")

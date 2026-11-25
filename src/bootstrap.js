@@ -22,7 +22,10 @@ async function startup({ id, version, rootURI }) {
 	LosslessOCRForZotero.init({ id, version, rootURI });
 	LosslessOCRForZotero.addToAllWindows();
 	const extension = LosslessOCRForZotero;
-	LosslessOCRBookmarkAPI = { run: (items, options) => extension.bookmarkItems(items, options) };
+	LosslessOCRBookmarkAPI = {
+		supportsRefresh: true,
+		run: (items, options) => extension.bookmarkItems(items, options)
+	};
 	Zotero.LosslessOCRBookmarks = LosslessOCRBookmarkAPI;
 }
 

@@ -85,6 +85,57 @@ class BookmarksTests(unittest.TestCase):
                                                 "-l", str(n), "-singlefile", str(path)])
             self.assertEqual(render(self.source), render(self.output))
 
+    def test_refresh_updates_titles_without_rebuilding_the_outline(self):
+        self.make_book(with_links=True)
+        first = Path(self.tmp.name) / "existing.pdf"
+        self.assertEqual(self.run_helper("--output", first)["status"], "added")
+        with pikepdf.Pdf.open(first, allow_overwriting_input=True) as pdf:
+            with pdf.open_outline() as outline:
+                root = outline.root[0]
+                root.title = "THE RIVER"
+                root.is_closed = True
+                root.color = (0.2, 0.4, 0.6)
+                root.children.append(pikepdf.OutlineItem("Personal bookmark", 2))
+                outline.root.append(pikepdf.OutlineItem(
+                    "External resource", action=pikepdf.Dictionary(S=pikepdf.Name.URI, URI="https://example.org")
+                ))
+            pdf.save(first)
+        before = first.read_bytes()
+        preview = self.run_helper("--refresh", source=first)
+        self.assertEqual(preview["changes"],
+                         [{"id": 1, "page": 2, "oldTitle": "THE RIVER", "title": "1. The River"}])
+        self.assertEqual(first.read_bytes(), before)
+        self.assertEqual(self.run_helper("--refresh", "--output", self.output, source=first)["status"], "refreshed")
+        with pikepdf.Pdf.open(first) as original, pikepdf.Pdf.open(self.output) as updated:
+            old = original.open_outline().root
+            new = updated.open_outline().root
+            self.assertEqual([item.title for item in new], ["1. The River", "2. The Coast", "External resource"])
+            self.assertEqual([item.title for item in new[0].children], ["1.1. Tributaries", "Personal bookmark"])
+            self.assertEqual(list(new[0].destination)[1:], list(old[0].destination)[1:])
+            self.assertEqual(new[0].is_closed, old[0].is_closed)
+            self.assertEqual(new[0].color, old[0].color)
+            self.assertEqual(str(new[-1].action.URI), "https://example.org")
+        self.assertEqual(self.run_helper("--refresh", source=self.output)["count"], 0)
+        self.assertEqual(self.run_helper("--refresh")["status"], "no_outline")
+
+    def test_refresh_can_apply_a_reviewed_title_and_skips_ambiguous_matches(self):
+        self.make_book(with_links=True)
+        first = Path(self.tmp.name) / "existing.pdf"
+        self.assertEqual(self.run_helper("--output", first)["status"], "added")
+        with pikepdf.Pdf.open(first, allow_overwriting_input=True) as pdf:
+            with pdf.open_outline() as outline:
+                outline.root[0].title = "THE RIVER"
+                outline.root.insert(1, pikepdf.OutlineItem("The River", 1))
+            pdf.save(first)
+        choices = Path(self.tmp.name) / "choices.json"
+        choices.write_text('[{"id":1,"level":1,"title":"Chapter 1 The River"},'
+                           '{"id":2,"level":2,"title":"1.1 Tributaries (reviewed)"}]')
+        result = self.run_helper("--refresh", "--choices", choices, "--output", self.output, source=first)
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(self.outline()[0][0], "THE RIVER")
+        self.assertEqual(self.outline()[1][0], "1.1 Tributaries (reviewed)")
+        self.assertEqual(self.outline()[2][0], "The River")
+
     def test_unlinked_printed_contents_uses_chapter_starts(self):
         self.make_book()
         result = self.run_helper("--output", self.output)

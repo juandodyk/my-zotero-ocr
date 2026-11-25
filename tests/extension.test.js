@@ -80,7 +80,8 @@ assert.deepEqual(
 	[
 		"lossless-ocr-for-zotero-item-menu",
 		"lossless-ocr-for-zotero-watermark-menu",
-		"lossless-ocr-for-zotero-bookmarks-menu"
+		"lossless-ocr-for-zotero-bookmarks-menu",
+		"lossless-ocr-for-zotero-refresh-bookmarks-menu"
 	]
 );
 assert.equal(
@@ -92,7 +93,7 @@ assert.equal(typeof menu.children[1].listeners.command, "function");
 
 // Adding the same window again must not duplicate either command.
 extension.addToWindow(window);
-assert.equal(menu.children.length, 3);
+assert.equal(menu.children.length, 4);
 
 assert.equal(
 	JSON.stringify(extension.parseHelperJSON('{"pages":2,"candidates":[]}', "test")),
@@ -272,6 +273,7 @@ async function testBookmarkAttachmentUpdates() {
 	let sourceChanged = false;
 	const item = {
 		async getFilePathAsync() { return source; },
+		getDisplayTitle() { return "Book"; },
 		isEditable() { return true; }
 	};
 	context.PathUtils = { tempDir: "/tmp", parent: path => path.slice(0, path.lastIndexOf("/")), join: (...parts) => parts.join("/") };
@@ -298,6 +300,24 @@ async function testBookmarkAttachmentUpdates() {
 	assert.equal((await extension.processBookmarkPDF({ ...job, apply: true })).status, "added");
 	assert.deepEqual(events.map(event => event[0]), ["stage", "replace", "refresh"]);
 	assert.equal(events[1][1], source);
+
+	events.length = 0;
+	extension.generateBookmarks = async ({ outputPath, refresh }) => {
+		assert.ok(outputPath);
+		assert.equal(refresh, true);
+		return { status: "refreshed", count: 1, changes: [{ oldTitle: "Chapter", title: "5 Chapter" }] };
+	};
+	const preview = message => {
+		assert.match(message, /Chapter → 5 Chapter/);
+		assert.deepEqual(events, []);
+	};
+	const refresh = { ...job, apply: true, refresh: true };
+	const cancel = { confirm(message) { preview(message); return false; } };
+	assert.equal((await extension.processBookmarkPDF({ ...refresh, window: cancel })).status, "cancelled");
+	assert.deepEqual(events, []);
+	const confirm = { confirm(message) { preview(message); return true; } };
+	assert.equal((await extension.processBookmarkPDF({ ...refresh, window: confirm })).status, "refreshed");
+	assert.deepEqual(events.map(event => event[0]), ["stage", "replace", "refresh"]);
 
 	events.length = 0;
 	extension.generateBookmarks = async () => {

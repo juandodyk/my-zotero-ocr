@@ -170,6 +170,11 @@ LosslessOCRForZotero = {
 				id: "lossless-ocr-for-zotero-bookmarks-menu",
 				l10n: "lossless-ocr-for-zotero-bookmarks-menu-label",
 				run: () => this.runBookmarks(window)
+			},
+			{
+				id: "lossless-ocr-for-zotero-refresh-bookmarks-menu",
+				l10n: "lossless-ocr-for-zotero-refresh-bookmarks-menu-label",
+				run: () => this.runBookmarks(window, { refresh: true })
 			}
 		];
 		for (const entry of entries) {
@@ -357,24 +362,28 @@ LosslessOCRForZotero = {
 		}
 	},
 
-	async runBookmarks(window) {
-		const progress = makeProgressWindow(window, "Reading selection", "PDF bookmarks");
+	async runBookmarks(window, { refresh = false } = {}) {
+		const title = refresh ? "Refresh PDF bookmark titles" : "PDF bookmarks";
+		const progress = makeProgressWindow(window, "Reading selection", title);
 		try {
 			const selected = Zotero.getActiveZoteroPane().getSelectedItems();
-			const results = await this.bookmarkItems(selected, { apply: true, progress, window });
+			const results = await this.bookmarkItems(selected, { apply: true, refresh, progress, window });
 			if (!results.length) return;
-			const added = results.filter(result => result.status === "added");
+			const updated = results.filter(result => ["added", "refreshed"].includes(result.status));
 			const issues = results.flatMap(result => {
 				const messages = [];
 				if (result.error) messages.push(result.error);
 				else if (result.unresolved) messages.push(result.unresolved + " contents entries could not be mapped to a page");
 				else if (result.status === "protected") messages.push("The PDF is encrypted or digitally signed");
-				else if (!["added", "existing"].includes(result.status)) messages.push("No bookmarks could be identified");
-				const warning = bookmarkTitleWarning(result);
+				else if (result.status === "no_outline") messages.push("No existing outline. Choose Add PDF Bookmarks first.");
+				else if (result.status === "unchanged" && !result.titleWarnings?.length) messages.push("No matching titles needed an update.");
+				else if (result.status === "insufficient") messages.push("No bookmarks could be identified.");
+				const warning = result.status === "cancelled" ? "" : bookmarkTitleWarning(result);
 				if (warning) messages.push(warning);
 				return messages.length ? [result.title + "\n" + messages.join("\n")] : [];
 			});
-			progress.finish(added.length + " PDFs bookmarked, " + (results.length - added.length) + " unchanged");
+			progress.finish(updated.length + (refresh ? " PDFs refreshed, " : " PDFs bookmarked, ")
+				+ (results.length - updated.length) + " unchanged");
 			if (issues.length) window.alert(issues.join("\n\n"));
 		}
 		catch (error) {
@@ -385,7 +394,7 @@ LosslessOCRForZotero = {
 		}
 	},
 
-	async bookmarkItems(items, { apply = false, choices, progress, window } = {}) {
+	async bookmarkItems(items, { apply = false, refresh = false, choices, progress, window } = {}) {
 		const jobs = await this.resolveJobs(items, window, { createParent: false, allPDFs: true });
 		if (choices && jobs.length !== 1) {
 			throw new Error("Reviewed choices require exactly one PDF attachment.");
@@ -403,7 +412,7 @@ LosslessOCRForZotero = {
 			this.processingItemIDs.add(pdfItem.id);
 			try {
 				jobProgress?.update("Finding bookmarks in " + identity.title, .15);
-				const result = await this.processBookmarkPDF({ pdfItem, tools, apply, choices });
+				const result = await this.processBookmarkPDF({ pdfItem, tools, apply, refresh, choices, window });
 				results.push({ ...identity, ...result });
 			}
 			catch (error) {
@@ -523,12 +532,13 @@ LosslessOCRForZotero = {
 		return tools;
 	},
 
-	async generateBookmarks({ sourcePath, outputPath, workDir, tools, choices, reuseText }) {
+	async generateBookmarks({ sourcePath, outputPath, workDir, tools, choices, reuseText, refresh }) {
 		const script = PathUtils.join(workDir, "pdf_bookmarks.py");
 		await this.installBundledScript("pdf_bookmarks.py", script);
 		const args = [script, sourcePath, "--language",
 			LosslessOCRCore.normalizeLanguage(this.getStringPref("language", "eng"))];
 		if (outputPath) args.push("--output", outputPath);
+		if (refresh) args.push("--refresh");
 		if (reuseText) args.push("--reuse-text");
 		for (const name of ["pdftohtml", "pdfinfo", "pdftoppm", "tesseract"]) {
 			if (tools[name]) args.push("--" + name, tools[name]);
@@ -544,7 +554,7 @@ LosslessOCRForZotero = {
 		return this.parseHelperJSON(output, "PDF bookmark");
 	},
 
-	async processBookmarkPDF({ pdfItem, tools, apply, choices }) {
+	async processBookmarkPDF({ pdfItem, tools, apply, choices, refresh, window }) {
 		const sourcePath = await pdfItem.getFilePathAsync();
 		if (!sourcePath) throw new Error("The attachment file could not be found on disk.");
 		if (apply && !pdfItem.isEditable()) throw new Error("The PDF attachment is read-only.");
@@ -555,8 +565,15 @@ LosslessOCRForZotero = {
 		const staged = PathUtils.join(PathUtils.parent(sourcePath), ".zotero-bookmarks-" + jobID + ".tmp");
 		await IOUtils.makeDirectory(workDir);
 		try {
-			const result = await this.generateBookmarks({ sourcePath, outputPath, workDir, tools, choices });
-			if (result.status === "added") {
+			const result = await this.generateBookmarks({ sourcePath, outputPath, workDir, tools, choices, refresh });
+			if (result.status === "refreshed" && window) {
+				const changes = result.changes.map(change => change.oldTitle + " → " + change.title).join("\n");
+				if (!window.confirm("Update " + result.count + " bookmark title(s) in "
+						+ pdfItem.getDisplayTitle() + "?\n\n" + changes)) {
+					return { status: "cancelled", count: 0 };
+				}
+			}
+			if (result.status === "added" || result.status === "refreshed") {
 				await IOUtils.copy(outputPath, staged, { noOverwrite: true });
 				const current = await IOUtils.stat(sourcePath);
 				if (await pdfItem.getFilePathAsync() !== sourcePath || !pdfItem.isEditable()
