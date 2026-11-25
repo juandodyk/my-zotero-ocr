@@ -29,6 +29,7 @@ CONTENTS = re.compile(
     r"^(?:(?:brief |detailed )?(?:table of )?contents|sommaire|table des matières|"
     r"inhaltsverzeichnis|[íi]ndice(?: general)?|contenido|sum[aá]rio)$", re.I
 )
+VOLUME_CONTENTS = re.compile(r"^contents (?:for|of) volume (?:[ivxlcdm]+|\d+)$", re.I)
 ROMAN = re.compile(r"(?=[mdclxvi]+$)m{0,3}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})", re.I)
 FOLIO = re.compile(r"^(.+?)((?:[.·]{2,}|…)\s*|\s+)(\d{1,5}|[ivxlcdm]{1,12})$", re.I)
 NUMBERED = re.compile(r"^(\d{1,3}(?:\.\d{1,3})*)(?:[.)])?\s+(?=\S)")
@@ -50,7 +51,8 @@ SECTION = re.compile(
     r"results|findings|analysis|discussion|results and discussion|conclusions?|"
     r"discussion and conclusions?|limitations|future work|acknowledg[em]+nts?|"
     r"references|bibliography|appendix(?:\s+[\w]+)?|supplementary materials?|"
-    r"preface|foreword|index|list of symbols)$", re.I
+    r"preface(?: to the exercises)?|foreword|(?:symbols )?index|list of symbols|"
+    r"solutions to selected exercises)$", re.I
 )
 DATE = re.compile(r"^(?:[A-Za-z]+\s+)?\d{1,2},?\s+\d{4}$|^\d{4}[-/]\d{1,2}[-/]\d{1,2}$")
 CAPTION = re.compile(r"^(?:fig(?:ure)?\.?|table|equation|scheme|plate|algorithm|listing)\s+[\dA-Z]+\b", re.I)
@@ -376,7 +378,7 @@ def join_contents_title(fragments):
     return clean(" ".join(title_lines))
 
 
-def linked_folio_rows(lines, links):
+def bounded_folio_rows(lines, links):
     # Some publishers link just the printed folio. The small right-aligned
     # rectangles delimit entries, including wrapped titles and split digits.
     if len(links) < 3 or any(right < .6 or right - left > .10
@@ -411,17 +413,69 @@ def linked_folio_rows(lines, links):
     return rows
 
 
+def contents_heading(lines):
+    for line in lines:
+        title, _, _ = toc_folio(line.text)
+        if CONTENTS.fullmatch(title.strip(" =:")):
+            return line, None
+        label = line.text.strip(" :")
+        if (VOLUME_CONTENTS.fullmatch(label)
+                and not any(other.x > .6 and abs(other.y - line.y) < .008
+                            and read_folio(other.text) for other in lines)):
+            return line, label.casefold()
+    return None, None
+
+
+def printed_folio_boxes(lines):
+    """Recognize a right-aligned column of standalone printed page numbers."""
+    numbers = [line for line in lines if line.x > .61 and line.x + line.width > .70
+               and line.y < .95 and read_folio(line.text)]
+    if len(numbers) < 3:
+        return []
+    edges = [line.x + line.width for line in numbers]
+    right = max(edges, key=lambda edge: sum(abs(edge - other) < .008 for other in edges))
+    anchors = sorted((line for line in numbers if abs(line.x + line.width - right) < .008),
+                     key=lambda line: line.y)
+    boxes = []
+    for line in anchors:
+        left = line.x
+        if line.text.isdecimal():
+            preceding = sorted((other for other in numbers if other.x < left
+                                and abs(other.y - line.y) < .006 and other.text.isdecimal()),
+                               key=lambda other: other.x, reverse=True)
+            for other in preceding:
+                if not -.002 <= left - other.x - other.width < .004:
+                    break
+                left = other.x
+        if any(other.x + other.width / 2 < left - .006 and abs(other.y - line.y) < .009
+               and any(char.isalpha() for char in other.text) for other in lines):
+            boxes.append((left, line.x + line.width, line.y - .002,
+                          line.y + line.height + .001, None, None))
+    return boxes
+
+
 def read_contents(pages, pdf, resolver):
     collected = []
     started = False
+    volume = None
     for index, lines in sorted(pages.items()):
-        explicit = any(CONTENTS.fullmatch(toc_folio(line.text)[0].strip(" =:")) for line in lines)
+        heading, page_volume = contents_heading(lines)
+        explicit = heading is not None
+        if page_volume and collected and page_volume != volume:
+            break
+        if page_volume:
+            volume = page_volume
         if not (explicit or started):
             parsed = [toc_folio(line.text) for line in lines]
             if sum(bool(folio and leaders) for _, folio, leaders in parsed) < 3:
                 continue
         links = link_rows(pdf.pages[index], resolver)
-        rows = linked_folio_rows(lines, links) or contents_rows(lines, links, explicit)
+        rows = bounded_folio_rows(lines, links)
+        if not rows and explicit and not links:
+            below = [line for line in lines if line.y > heading.y + heading.height + .003]
+            rows = bounded_folio_rows(below, printed_folio_boxes(below))
+        if not rows:
+            rows = contents_rows(lines, links, explicit)
         destinations = sum(folio is not None or target is not None for _, _, folio, target, _, _ in rows)
         minimum = 1 if explicit or started and any(target is not None for _, _, _, target, _, _ in rows) else 2
         if destinations >= (minimum if explicit or started else 3):
@@ -476,8 +530,10 @@ def read_contents(pages, pdf, resolver):
         else:
             indents = margins.get(line.x >= column_break, [])
             level = base + min(2, sum(round(line.x, 2) - left >= .023 for left in indents))
-            if BOOK_UNIT.match(title) or SECTION.fullmatch(title):
+            if BOOK_UNIT.match(title) or SECTION.fullmatch(title) or VOLUME_CONTENTS.fullmatch(title):
                 level = base
+            elif re.match(r"^exercises for chapter\s+\d+\b", title, re.I):
+                level = base + 1
             if re.fullmatch(r"exe.{1,6}ises", title, re.I):
                 title, level = "Exercises", base + int(chapter_prefix is not None)
         raw_folio = FOLIO.fullmatch(line.text)

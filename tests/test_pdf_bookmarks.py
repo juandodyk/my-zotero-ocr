@@ -211,6 +211,51 @@ class BookmarksTests(unittest.TestCase):
             ("1.2 The headlands", 5, 2),
         ])
 
+    def test_unlinked_volume_contents_keeps_wrapped_entries_and_skips_the_other_volume(self):
+        c = canvas.Canvas(str(self.source), pagesize=(432, 648))
+        c.setFont("Helvetica-Bold", 18)
+        c.drawString(130, 570, "Contents for Volume I")
+        c.setFont("Helvetica", 11)
+        c.drawString(75, 500, "Contents for Volume II")
+        c.drawRightString(360, 500, "ii")
+        c.drawString(50, 460, "1")
+        c.drawString(75, 460, "The coast")
+        c.drawRightString(360, 460, "25")
+        c.drawString(75, 437, "1.1")
+        c.drawString(105, 437, "The geometry of a long")
+        c.drawString(105, 424, "shoreline")
+        c.drawRightString(360, 424, "26")
+        c.drawString(75, 402, "1.2")
+        c.drawString(105, 402, "The headlands")
+        c.drawRightString(360, 402, "28")
+        c.drawRightString(360, 55, "i")
+        c.showPage()
+
+        c.setFont("Helvetica-Bold", 18)
+        c.drawString(130, 570, "Contents for Volume II")
+        c.setFont("Helvetica", 11)
+        for index in range(3):
+            y = 500 - index * 23
+            c.drawString(75, y, f"{index + 2} Another volume")
+            c.drawRightString(360, y, str(index + 25))
+        c.showPage()
+
+        for number in range(25, 29):
+            c.setFont("Helvetica", 10)
+            c.drawRightString(360, 609, str(number))
+            c.drawString(66, 520, "The body has no searchable chapter titles here.")
+            c.showPage()
+        c.save()
+
+        result = self.run_helper("--output", self.output)
+        self.assertEqual((result["status"], result["count"], result["unresolved"]), ("added", 4, 0))
+        self.assertEqual([item[:3] for item in self.outline()], [
+            ("Contents for Volume II", 2, 1),
+            ("1 The coast", 3, 1),
+            ("1.1 The geometry of a long shoreline", 4, 2),
+            ("1.2 The headlands", 6, 2),
+        ])
+
     def test_unlinked_printed_contents_uses_chapter_starts(self):
         self.make_book()
         result = self.run_helper("--output", self.output)
