@@ -6,6 +6,7 @@ import argparse
 from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 import csv
+from difflib import SequenceMatcher
 import io
 import json
 import os
@@ -30,6 +31,11 @@ CONTENTS = re.compile(
 ROMAN = re.compile(r"(?=[mdclxvi]+$)m{0,3}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})", re.I)
 FOLIO = re.compile(r"^(.+?)((?:[.·]{2,}|…)\s*|\s+)(\d{1,5}|[ivxlcdm]{1,12})$", re.I)
 NUMBERED = re.compile(r"^(\d{1,3}(?:\.\d{1,3})*)(?:[.)])?\s+(?=\S)")
+TOC_NUMBERED = re.compile(r"^((?:\d{1,3}|[A-Z])(?:\.\d{1,3})+)(?:[.)])?\s+(?=\S)")
+CHAPTER_NUMBER = re.compile(r"^\d{1,3}[.)]?(?:\s|$)")
+LEADER_RUN = re.compile(r"[.·…:]{2,}|[a-z]{12,}", re.I)
+APPENDICES = re.compile(r"^appendices$", re.I)
+APPENDIX = re.compile(r"^appendix\s+[a-z0-9]+(?:[:.\s]|$)", re.I)
 BOOK_UNIT = re.compile(r"^(part|book|chapter|appendix|volume|section)\b", re.I)
 SECTION = re.compile(
     r"^(abstract|introduction|background|literature review|related work|theory|"
@@ -64,6 +70,7 @@ class Entry:
     destination: object = None
     suggested: bool = True
     group: int | None = None
+    repair_title: bool = False
 
 
 def clean(value):
@@ -107,11 +114,11 @@ def read_layout(path, first, last, tool):
     return pages
 
 
-def ocr_page(path, index, args):
+def ocr_page(path, index, args, *, resolution=1550, segmentation=6):
     page = str(index + 1)
-    image = spawn([args.pdftoppm, "-cropbox", "-gray", "-scale-to", "1550", "-f", page,
+    image = spawn([args.pdftoppm, "-cropbox", "-gray", "-scale-to", str(resolution), "-f", page,
                    "-l", page, "-singlefile", path])
-    tsv = spawn([args.tesseract, "stdin", "stdout", "-l", args.language, "--psm", "6", "tsv"], image)
+    tsv = spawn([args.tesseract, "stdin", "stdout", "-l", args.language, "--psm", str(segmentation), "tsv"], image)
     rows = list(csv.DictReader(io.StringIO(tsv.decode("utf-8")), delimiter="\t"))
     if not rows:
         return []
@@ -239,29 +246,82 @@ def link_rows(page, resolver):
     return result
 
 
+def strip_leaders(text):
+    """Return title and whether a dotted or OCR-corrupted leader was removed."""
+    for match in LEADER_RUN.finditer(text):
+        token = match[0].casefold()
+        if token.isalpha() and sum(char in "ces" for char in token) < len(token) * .70:
+            continue
+        tail = text[match.start():].casefold()
+        letters = re.findall(r"[a-z0-9]", tail)
+        if any(char not in "0o" for char in letters) and (
+            len(letters) < 8 or sum(char in "ces" for char in letters) < len(letters) * .62
+        ):
+            continue
+        title = text[:match.start()].rstrip(" .·…:")
+        title = re.sub(r"(?:^|\s)[.·…:o0]{2,}$", "", title, flags=re.I).rstrip(" .·…:")
+        return title, True
+    return text, False
+
+
+def toc_folio(text):
+    if read_folio(text):
+        return "", text.casefold(), False
+    match = FOLIO.fullmatch(text)
+    if match and read_folio(match[3]):
+        title, noisy = strip_leaders(match[1])
+        return title.rstrip(" .·…:"), match[3].casefold(), noisy or not match[2].isspace()
+    return text, None, False
+
+
 def contents_rows(lines, links, explicit):
-    # Poppler sometimes emits a right-aligned folio as its own text item.
-    # Pair it with the closest title to its left on the same row.
-    merged = {id(line): line for line in lines}
-    for folio in lines:
-        if not read_folio(folio.text) or not .05 < folio.y < .91:
+    lines = sorted(lines, key=lambda line: (line.y, line.x))
+    entries = []
+    fragments = []
+    for line in lines:
+        title, folio, leaders = toc_folio(line.text)
+        fragments.append([line, title, folio, leaders])
+    # A right-aligned page number can be a separate text fragment, sometimes
+    # with the OCR's interpretation of the dots attached to it.
+    for index, (line, title, folio, leaders) in enumerate(fragments):
+        if title or folio is None or not .05 < line.y < .95:
             continue
-        left = [line for line in merged.values() if abs(line.y - folio.y) < .011
-                and 0 <= folio.x - line.x - line.width < .65 and not read_folio(line.text)
-                and not FOLIO.fullmatch(line.text)]
-        if left:
-            title = max(left, key=lambda line: line.x + line.width)
-            merged.pop(id(folio), None)
-            merged[id(title)] = replace(title, text=title.text + " … " + folio.text,
-                                        width=folio.x + folio.width - title.x)
-    rows = []
-    for line in sorted(merged.values(), key=lambda line: (round(line.y, 3), line.x)):
-        if CONTENTS.fullmatch(line.text.strip(":")) or line.y < 0.035 or line.y > 0.96:
+        left = [row for row in fragments if row[1] and row[2] is None
+                and abs(row[0].y - line.y) < .011 and row[0].x < line.x
+                and -.025 < line.x - row[0].x - row[0].width < .65
+                and not CONTENTS.fullmatch(row[1])]
+        if not left:
             continue
-        match = FOLIO.fullmatch(line.text)
-        title, folio = (match[1].rstrip(".·… "), match[3].lower()) if match and read_folio(match[3]) else (line.text, None)
-        leaders = match and not match[2].isspace()
-        midpoint = line.y + 0.006
+        previous = max(left, key=lambda row: row[0].x + row[0].width)
+        previous[2], previous[3] = folio, True
+        previous[0] = replace(previous[0], width=line.x + line.width - previous[0].x)
+        fragments[index][2] = None
+
+    # Rejoin chapter numbers and titles split into several nearby fragments.
+    fragments.sort(key=lambda row: (round(row[0].y, 2), row[0].x))
+    for index, row in enumerate(fragments):
+        line, title, folio, _ = row
+        if not CHAPTER_NUMBER.match(title or line.text) or not (title or folio):
+            continue
+        for next_row in fragments[index + 1:]:
+            following, next_title, next_folio, _ = next_row
+            if following.y - line.y > .012:
+                break
+            if (not next_title or next_folio or abs(following.y - line.y) > .009
+                    or not -.025 < following.x - line.x - line.width < .075):
+                continue
+            row[1] = (row[1] or line.text) + " " + next_title
+            row[2] = None
+            line = replace(line, width=following.x + following.width - line.x)
+            row[0] = line
+            next_row[1] = ""
+
+    for line, title, folio, leaders in fragments:
+        if not title or CONTENTS.fullmatch(title.strip(" =:")) or not .035 < line.y < .96:
+            continue
+        if len(title) > 220 or not any(char.isalpha() for char in title):
+            continue
+        midpoint = line.y + .006
         linked = [(target, dest) for left, right, top, bottom, target, dest in links
                   if top - .012 <= midpoint <= bottom + .008 and left < line.x + line.width
                   and right >= line.x - .008 and target != line.page]
@@ -269,66 +329,119 @@ def contents_rows(lines, links, explicit):
             target, dest = linked[0]
         else:
             target, dest = None, None
-        if not (target is not None or (folio and (explicit or leaders))):
-            continue
-        if len(title) < 2 or len(title) > 220 or not any(char.isalpha() for char in title):
-            continue
-        rows.append((line, title, folio, target, dest))
-    return rows
+        entries.append((line, title, folio, target, dest, leaders))
+
+    credible_edges = [line.x + line.width for line, _, folio, _, _, leaders in entries if folio and leaders]
+    # Without leaders or internal links, require a visible contents heading
+    # and a column of at least two aligned page numbers.
+    if explicit and not credible_edges:
+        edges = [line.x + line.width for line, _, folio, _, _, _ in entries if folio]
+        credible_edges = [edge for edge in edges if edge > .50
+                          and sum(abs(edge - other) < .025 for other in edges) >= 2]
+    return [(line, title, folio, target, dest, leaders)
+            for line, title, folio, target, dest, leaders in entries
+            if (target is not None or folio and (
+                leaders or any(abs(line.x + line.width - edge) < .025 for edge in credible_edges)
+            ) or folio is None and target is None)]
 
 
 def read_contents(pages, pdf, resolver):
     collected = []
     started = False
     for index, lines in sorted(pages.items()):
-        explicit = any(CONTENTS.fullmatch(line.text.strip(":")) for line in lines)
+        explicit = any(CONTENTS.fullmatch(toc_folio(line.text)[0].strip(" =:")) for line in lines)
         if not (explicit or started):
-            # An unlabeled list needs visible TOC evidence before links or
-            # aligned numbers are considered; papers often have citation links.
-            leaders = sum(bool(match and not match[2].isspace() and read_folio(match[3]))
-                          for line in lines if (match := FOLIO.fullmatch(line.text)))
-            if leaders < 3:
+            parsed = [toc_folio(line.text) for line in lines]
+            if sum(bool(folio and leaders) for _, folio, leaders in parsed) < 3:
                 continue
-        rows = contents_rows(lines, link_rows(pdf.pages[index], resolver), explicit or started)
-        minimum = 1 if explicit or started and any(target is not None for _, _, _, target, _ in rows) else 2
-        if len(rows) >= (minimum if explicit or started else 3):
+        rows = contents_rows(lines, link_rows(pdf.pages[index], resolver), explicit)
+        destinations = sum(folio is not None or target is not None for _, _, folio, target, _, _ in rows)
+        minimum = 1 if explicit or started and any(target is not None for _, _, _, target, _, _ in rows) else 2
+        if destinations >= (minimum if explicit or started else 3):
             collected.extend(rows)
             started = True
         elif started:
             break
         elif explicit:
             started = True
-    if len(collected) < 2:
+    anchor_rows = [row for row in collected if row[2] is not None or row[3] is not None]
+    if len(anchor_rows) < 2:
         return []
-    lefts = sorted({round(line.x, 2) for line, *_ in collected})
+    lefts = sorted({round(line.x, 2) for line, *_ in anchor_rows})
     # A wide column break is not an indentation level.
     column_break = next((right - .01 for left, right in zip(lefts, lefts[1:]) if right - left > .27), 1)
-    if column_break < 1:
-        collected.sort(key=lambda row: (row[0].page, row[0].x >= column_break, row[0].y, row[0].x))
+    collected.sort(key=lambda row: (row[0].page, row[0].x >= column_break, round(row[0].y, 2), row[0].x))
     margins = {
-        side: sorted({round(line.x, 2) for line, *_ in collected if (line.x >= column_break) == side})
-        for side in {line.x >= column_break for line, *_ in collected}
+        side: sorted({round(line.x, 2) for line, *_ in anchor_rows if (line.x >= column_break) == side})
+        for side in {line.x >= column_break for line, *_ in anchor_rows}
     }
     parts = any(re.match(r"^(part|book|volume)\b", title, re.I) for _, title, *_ in collected)
     entries = []
-    for line, title, folio, target, dest in collected:
-        number = NUMBERED.match(title)
+    chapter_prefix = None
+    inside_appendices = False
+    has_appendix_group = any(APPENDICES.fullmatch(title) for _, title, *_ in collected)
+    for index, (line, title, folio, target, dest, leaders) in enumerate(collected):
+        number = TOC_NUMBERED.match(title) or NUMBERED.match(title)
         base = 2 if parts else 1
-        if re.match(r"^(part|book|volume)\b", title, re.I):
+        if folio is None and target is None:
+            next_number = next(
+                (number for following, next_title, *_ in collected[index + 1:index + 3]
+                 if following.page == line.page and 0 < following.y - line.y < .09
+                 and (number := TOC_NUMBERED.match(next_title))),
+                None,
+            )
+            if APPENDICES.fullmatch(title):
+                inside_appendices = True
+                level = 1
+            elif BOOK_UNIT.match(title) and (next_number or APPENDIX.match(title)):
+                level = 2 if inside_appendices else base
+            elif next_number and (title.isupper() or CHAPTER_NUMBER.match(title)):
+                level = base
+                chapter_prefix = next_number[1].split(".")[0]
+            else:
+                continue
+        elif re.match(r"^(part|book|volume)\b", title, re.I):
             level = 1
         elif number:
-            level = base + number[1].count(".")
+            prefix = number[1].split(".")[0]
+            level = base + number[1].count(".") + int(has_appendix_group and prefix.isalpha())
+            chapter_prefix = prefix
         else:
-            indents = margins[line.x >= column_break]
+            indents = margins.get(line.x >= column_break, [])
             level = base + min(2, sum(round(line.x, 2) - left >= .023 for left in indents))
             if BOOK_UNIT.match(title) or SECTION.fullmatch(title):
                 level = base
-        entries.append(Entry(title, level, target, folio=folio, destination=dest))
-    return [(entry, row[0].page) for entry, row in zip(entries, collected)]
+            if re.fullmatch(r"exe.{1,6}ises", title, re.I):
+                title, level = "Exercises", base + int(chapter_prefix is not None)
+        raw_folio = FOLIO.fullmatch(line.text)
+        repair_title = bool(raw_folio and strip_leaders(raw_folio[1])[1])
+        entries.append((Entry(title, level, target, folio=folio, destination=dest, repair_title=repair_title), line.page))
+    return entries
+
+
+def recover_missing_contents_rows(rows, pages, pdf, path, args):
+    noisy = Counter(page for entry, page in rows if entry.repair_title)
+    for index in sorted(noisy, key=lambda page: (-noisy[page], page))[:6]:
+        if noisy[index] < 2 or not has_page_image(pdf.pages[index]):
+            continue
+        try:
+            fresh = ocr_page(path, index, args, resolution=2300, segmentation=3)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            # This refinement is optional; the existing OCR is still usable.
+            continue
+        lines = pages[index]
+        for line in fresh:
+            title, folio, leaders = toc_folio(line.text)
+            if not (folio and leaders and len(normalized(title)) >= 3):
+                continue
+            if any(abs(old.y - line.y) < .012
+                   and old.x < line.x + line.width and line.x < old.x + old.width for old in lines):
+                continue
+            lines.append(line)
 
 
 def title_key(text):
-    number = NUMBERED.match(text)
+    number = TOC_NUMBERED.match(text) or NUMBERED.match(text)
     if number:
         text = text[number.end():]
     text = re.sub(r"^(?:chapter|part|book|section)\s+(?:\d+|[ivxlcdm]+)\W+", "", text, flags=re.I)
@@ -353,8 +466,60 @@ def heading_matches(entries, pages, excluded):
             for text in texts:
                 key = title_key(text)
                 if key in wanted and len(key) >= 3:
-                    matches[key].append(line)
+                    matches[key].append(replace(line, text=text) if text != line.text else line)
     return matches
+
+
+def book_heading_hits(lines):
+    # A repeated running header can spell the chapter title exactly.
+    hits = {}
+    for line in lines:
+        current = hits.get(line.page)
+        if current is None or (line.y >= .10, line.size) > (current.y >= .10, current.size):
+            hits[line.page] = line
+    if len(hits) > 1 and any(line.y >= .10 for line in hits.values()):
+        return {page: line for page, line in hits.items() if line.y >= .10}
+    return hits
+
+
+def resolved_book_entry(entry, page, hits, pages):
+    if page is None:
+        return entry
+    line = hits.get(page)
+    title = entry.title
+    if line and not TOC_NUMBERED.match(title) and (entry.repair_title or entry.folio is None or title.isupper()):
+        chapter = CHAPTER_NUMBER.match(title)
+        if chapter:
+            title = line.text if CHAPTER_NUMBER.match(line.text) else chapter[0].strip() + " " + line.text
+        elif not NUMBERED.match(line.text):
+            title = line.text
+            if entry.level == 1 and entry.folio is None:
+                number = next((candidate.text for candidate in pages.get(page, [])
+                               if candidate.text.isdecimal() and candidate.size >= line.size
+                               and abs(candidate.x - line.x) < .05
+                               and 0 < line.y - candidate.y < .065), None)
+                if number:
+                    title = number + " " + title
+    if entry.repair_title:
+        number = TOC_NUMBERED.match(entry.title)
+        options = []
+        for candidate in pages.get(page, []):
+            candidate_number = TOC_NUMBERED.match(candidate.text)
+            if not candidate_number or number and number[1] != candidate_number[1]:
+                continue
+            proposed = candidate.text
+            if candidate.y < .10 and entry.folio:
+                match = FOLIO.fullmatch(proposed)
+                if match and match[3].casefold() == entry.folio:
+                    proposed = match[1]
+            current = title_key(entry.title)
+            possible = title_key(proposed)
+            ratio = SequenceMatcher(None, current, possible).ratio()
+            if ratio >= (.66 if number else .77):
+                options.append((candidate, proposed, ratio))
+        if options:
+            line, title, _ = max(options, key=lambda row: (row[0].y >= .10, row[2]))
+    return replace(entry, title=title, page=page, y=line.y if line else None)
 
 
 def resolve_contents(rows, pages, pdf, *, alternatives=False):
@@ -366,29 +531,45 @@ def resolve_contents(rows, pages, pdf, *, alternatives=False):
         for index, page in enumerate(pdf.pages):
             labels[page.label.casefold()].append(index)
 
-    # Use exact destinations and title matches as anchors before inferring offsets.
+    hits = [book_heading_hits(matches.get(title_key(entry.title), [])) for entry in entries]
     resolved = []
     previous = -1
-    for entry in entries:
+    for entry, candidates in zip(entries, hits):
         if entry.page is not None:
             resolved.append(entry)
             previous = entry.page
             continue
-        hits = {line.page: line for line in reversed(matches.get(title_key(entry.title), []))}
         labeled = [index for index in labels.get(entry.folio, []) if index not in excluded]
-        if len(hits) == 1:
-            page = next(iter(hits))
-        elif len(labeled) == 1:
+        forward = [index for index in candidates if index >= previous]
+        if len(labeled) == 1 and labeled[0] >= previous:
             page = labeled[0]
-        elif len(labeled) > 1:
-            overlap = [index for index in labeled if index in hits and index >= previous]
-            page = overlap[0] if len(overlap) == 1 else None
+        elif len(forward) == 1:
+            page = forward[0]
         else:
-            page = None
-        line = hits.get(page)
-        resolved.append(replace(entry, page=page, y=line.y if line else None))
+            overlap = [index for index in labeled if index in forward]
+            page = overlap[0] if len(overlap) == 1 else None
+        resolved.append(resolved_book_entry(entry, page, candidates, pages))
         if page is not None:
             previous = page
+
+    # A bad OCR folio can point backward to another chapter. Search for its
+    # heading between independently mapped neighboring entries.
+    previous = -1
+    next_pages = [len(pdf.pages)] * len(resolved)
+    following = len(pdf.pages)
+    for index in reversed(range(len(resolved))):
+        next_pages[index] = following
+        if resolved[index].page is not None:
+            following = resolved[index].page
+    for index, entry in enumerate(resolved):
+        if entry.page is None:
+            candidates = hits[index]
+            in_range = [page for page in candidates if previous <= page <= next_pages[index]]
+            if len(in_range) == 1:
+                entry = resolved_book_entry(entry, in_range[0], candidates, pages)
+                resolved[index] = entry
+        if entry.page is not None:
+            previous = entry.page
 
     sequences = []
     previous_folio = None
@@ -416,17 +597,16 @@ def resolve_contents(rows, pages, pdf, *, alternatives=False):
             else:
                 continue
             target = number + offset - 1
-            if 0 <= target < len(pdf.pages) and target not in excluded:
-                line = next((line for line in matches.get(title_key(entry.title), []) if line.page == target), None)
-                resolved[index] = replace(entry, page=target, y=line.y if line else None)
+            lower = next((row.page for row in reversed(resolved[:index]) if row.page is not None), 0)
+            if lower <= target < len(pdf.pages) and target <= next_pages[index] and target not in excluded:
+                resolved[index] = resolved_book_entry(entry, target, hits[index], pages)
     if not alternatives:
         return resolved
     candidates = []
     for group, entry in enumerate(resolved, 1):
         candidates.append(replace(entry, group=group))
         if entry.page is None:
-            hits = {line.page: line for line in reversed(matches.get(title_key(entry.title), []))}
-            for hit in sorted(hits.values(), key=lambda line: line.page)[:5]:
+            for hit in sorted(hits[group - 1].values(), key=lambda line: line.page)[:5]:
                 candidates.append(replace(entry, page=hit.page, y=hit.y, suggested=False, group=group))
     return candidates
 
@@ -657,7 +837,8 @@ def generate(args):
         resolver = Destinations(pdf)
         can_ocr = not args.no_ocr
         rows = read_contents(pages, pdf, resolver)
-        if not rows and can_ocr:
+        can_probe = can_ocr and not args.reuse_text
+        if not rows and can_probe:
             for index in range(min(count, OCR_FRONT_PAGES)):
                 if enough_text(pages[index]) or not has_page_image(pdf.pages[index]):
                     continue
@@ -666,13 +847,16 @@ def generate(args):
                 if rows and index > max(page for _, page in rows):
                     break
         if rows:
+            if can_ocr:
+                recover_missing_contents_rows(rows, pages, pdf, path, args)
+                rows = read_contents(pages, pdf, resolver)
             method = "contents"
             entries = resolve_contents(rows, pages, pdf)
-            if any(entry.page is None for entry in entries):
+            if any(entry.page is None or entry.repair_title for entry in entries):
                 pages.update(read_layout(path, front_end, count - 1, args.pdftohtml))
                 entries = resolve_contents(rows, pages, pdf)
                 after_contents = max(page for _, page in rows) + 1
-                if (can_ocr and any(entry.page is None for entry in entries)
+                if (can_probe and any(entry.page is None for entry in entries)
                         and not any(enough_text(pages[index]) for index in range(after_contents, min(count, after_contents + 6)))):
                     probe_chapters(rows, pages, path, args)
                 entries = resolve_contents(rows, pages, pdf, alternatives=True)
@@ -705,6 +889,7 @@ def main():
     parser.add_argument("--candidates", action="store_true", help="Include candidates even when writing a PDF.")
     parser.add_argument("--language", default="eng")
     parser.add_argument("--no-ocr", action="store_true", help="Use only the existing PDF text layer.")
+    parser.add_argument("--reuse-text", action="store_true", help="OCR only to repair visibly corrupted contents.")
     for tool in ("pdftohtml", "pdfinfo", "pdftoppm", "tesseract"):
         parser.add_argument("--" + tool, default=tool)
     args = parser.parse_args()

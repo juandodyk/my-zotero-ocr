@@ -511,13 +511,13 @@ LosslessOCRForZotero = {
 		return tools;
 	},
 
-	async generateBookmarks({ sourcePath, outputPath, workDir, tools, choices, noOCR }) {
+	async generateBookmarks({ sourcePath, outputPath, workDir, tools, choices, reuseText }) {
 		const script = PathUtils.join(workDir, "pdf_bookmarks.py");
 		await this.installBundledScript("pdf_bookmarks.py", script);
 		const args = [script, sourcePath, "--language",
 			LosslessOCRCore.normalizeLanguage(this.getStringPref("language", "eng"))];
 		if (outputPath) args.push("--output", outputPath);
-		if (noOCR) args.push("--no-ocr");
+		if (reuseText) args.push("--reuse-text");
 		for (const name of ["pdftohtml", "pdfinfo", "pdftoppm", "tesseract"]) {
 			if (tools[name]) args.push("--" + name, tools[name]);
 		}
@@ -1138,7 +1138,7 @@ LosslessOCRForZotero = {
 				progress.update("Finding PDF bookmarks", 0.74);
 				const bookmarkedPath = PathUtils.join(workDir, "bookmarked.pdf");
 				bookmarks = await this.optionalBookmarks(tools, bookmarkTools => this.generateBookmarks({
-					sourcePath: outputPath, outputPath: bookmarkedPath, workDir, tools: bookmarkTools, noOCR: true
+					sourcePath: outputPath, outputPath: bookmarkedPath, workDir, tools: bookmarkTools, reuseText: true
 				}));
 				if (bookmarks.status === "added") outputPath = bookmarkedPath;
 			}

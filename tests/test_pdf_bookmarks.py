@@ -109,6 +109,54 @@ class BookmarksTests(unittest.TestCase):
         self.assertEqual(self.run_helper("--choices", choices, "--output", self.output)["status"], "added")
         self.assertEqual([entry[1] for entry in self.outline()], [2, 4, 6])
 
+    def test_ocr_leaders_and_bad_folio_use_book_headings_and_page_labels(self):
+        c = canvas.Canvas(str(self.source))
+        c.setFont("Helvetica-Bold", 21)
+        c.drawString(55, 748, "Contents")
+        c.setFont("Helvetica", 12)
+        c.drawString(55, 695, "PREFACE ooo.ccccccceeecccesssceces vii")
+        c.drawString(55, 670, "INDEX OF NOTATION.")
+        c.drawString(240, 670, ".........ccccccceeeccccccseeseeee viii")
+        c.drawString(55, 635, "1")
+        c.drawString(83, 635, "THE RIVER")
+        c.drawString(84, 612, "1.1 River Basin..........cccccsesssccceeeeees 1")
+        c.drawString(84, 589, "1.2 Tributarles.........ccccccccccessseeessss 2")
+        c.drawString(84, 566, "EXEYCISES...............cccccccceeeceeesesss 1")
+        c.drawString(83, 534, "THE COAST")
+        c.drawString(84, 511, "2.1 Coastal Systems.........cccccccceeeeeeees 4")
+        c.showPage()
+        c.setFont("Helvetica-Bold", 17)
+        c.drawString(55, 730, "Preface")
+        c.showPage()
+        c.setFont("Helvetica-Bold", 17)
+        c.drawString(55, 730, "Index of Notation")
+        c.setFont("Helvetica", 11)
+        for index, text in enumerate(("compositum of fields K and L", "nxn matrices of determinant 1",
+                                       "The size of the orbit is c", "norm of a bounded operator 7")):
+            c.drawString(105, 660 - 17 * index, text)
+        c.showPage()
+        for page, headings in enumerate((("The River", "1.1 River Basin"), ("1.2 Tributaries",),
+                                         ("Exercises",), ("The Coast", "2.1 Coastal Systems")), 1):
+            c.setFont("Helvetica", 9)
+            c.drawString(50, 788, "The River" if page < 4 else "The Coast")
+            for index, title in enumerate(headings):
+                c.setFont("Helvetica-Bold", 17)
+                c.drawString(55, 675 - 45 * index, title)
+            c.showPage()
+        c.save()
+        with pikepdf.Pdf.open(self.source, allow_overwriting_input=True) as pdf:
+            pdf.Root.PageLabels = pikepdf.Dictionary(Nums=pikepdf.Array([
+                0, pikepdf.Dictionary(S=pikepdf.Name.r, St=6), 3, pikepdf.Dictionary(S=pikepdf.Name.D)
+            ]))
+            pdf.save(self.source)
+        report = self.run_helper("--output", self.output)
+        self.assertEqual((report["status"], report["count"], report["unresolved"]), ("added", 8, 0))
+        self.assertEqual([entry[:3] for entry in self.outline()], [
+            ("Preface", 2, 1), ("Index of Notation", 3, 1), ("1 The River", 4, 1),
+            ("1.1 River Basin", 4, 2), ("1.2 Tributaries", 5, 2), ("Exercises", 6, 2),
+            ("The Coast", 7, 1), ("2.1 Coastal Systems", 7, 2)
+        ])
+
     def test_paper_headings_exclude_title_captions_and_running_headers(self):
         c = canvas.Canvas(str(self.source))
         c.setFont("Helvetica-Bold", 24)

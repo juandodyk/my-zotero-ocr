@@ -99,7 +99,9 @@ and Zotero annotations are preserved.
 Books use their printed contents, internal links, page labels, and verified
 chapter starts. Papers use tagged headings or text layout. On image-only books
 the helper uses Tesseract on selected front-matter pages and likely chapter
-starts. It leaves an ambiguous book unchanged until its candidates are reviewed.
+starts. If existing OCR garbles the contents, it checks the body headings and
+re-reads just the affected contents pages. It leaves an ambiguous book
+unchanged until its candidates are reviewed.
 The process is local and makes no model or network calls.
 
 Enable **Add PDF bookmarks when running OCR** in the extension’s Zotero settings
@@ -190,7 +192,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 ## Install
 
 Run `./build.sh`, then in Zotero open **Tools → Plugins**, choose **Install
-Plugin From File**, and select `build/lossless-ocr-for-zotero-1.9.1.xpi`.
+Plugin From File**, and select `build/lossless-ocr-for-zotero-1.9.2.xpi`.
 Published releases provide the same versioned XPI on GitHub.
 
 This is a full replacement for the earlier local “OCRmyPDF for Zotero”
