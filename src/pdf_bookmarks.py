@@ -359,17 +359,21 @@ def contents_rows(lines, links, explicit):
             ) or folio is None and target is None)]
 
 
-def join_contents_title(fragments):
+def contents_baselines(fragments):
     baselines = []
     for line in sorted(fragments, key=lambda line: line.y + line.height):
         if not baselines or line.y + line.height - baselines[-1][0] > .009:
             baselines.append((line.y + line.height, []))
         baselines[-1][1].append(line)
+    return [sorted(group, key=lambda line: line.x) for _, group in baselines]
+
+
+def join_contents_title(fragments):
     title_lines = []
-    for _, group in baselines:
+    for group in contents_baselines(fragments):
         words = []
         right = None
-        for line in sorted(group, key=lambda line: line.x):
+        for line in group:
             if right is not None and line.x - right > .0035:
                 words.append(" ")
             words.append(line.text)
@@ -426,32 +430,58 @@ def contents_heading(lines):
     return None, None
 
 
-def printed_folio_boxes(lines):
-    """Recognize a right-aligned column of standalone printed page numbers."""
-    numbers = [line for line in lines if line.x > .61 and line.x + line.width > .70
-               and line.y < .95 and read_folio(line.text)]
+def printed_contents_rows(lines):
+    """Assemble rows around a repeated right-aligned page-number column."""
+    numbers = {line for line in lines if line.x > .61 and line.x + line.width > .70
+               and line.y < .95 and read_folio(line.text)}
     if len(numbers) < 3:
         return []
     edges = [line.x + line.width for line in numbers]
-    right = max(edges, key=lambda edge: sum(abs(edge - other) < .008 for other in edges))
-    anchors = sorted((line for line in numbers if abs(line.x + line.width - right) < .008),
-                     key=lambda line: line.y)
-    boxes = []
-    for line in anchors:
-        left = line.x
-        if line.text.isdecimal():
-            preceding = sorted((other for other in numbers if other.x < left
-                                and abs(other.y - line.y) < .006 and other.text.isdecimal()),
-                               key=lambda other: other.x, reverse=True)
-            for other in preceding:
-                if not -.002 <= left - other.x - other.width < .004:
-                    break
-                left = other.x
-        if any(other.x + other.width / 2 < left - .006 and abs(other.y - line.y) < .009
-               and any(char.isalpha() for char in other.text) for other in lines):
-            boxes.append((left, line.x + line.width, line.y - .002,
-                          line.y + line.height + .001, None, None))
-    return boxes
+    right = max(sorted(edges), key=lambda edge: sum(abs(edge - other) < .008 for other in edges))
+    rows = []
+    for group in contents_baselines(lines):
+        anchor = next((line for line in reversed(group) if line in numbers
+                       and abs(line.x + line.width - right) < .015), None)
+        folio = None
+        fragments = [line for line in group if line.x + line.width / 2 < right - .043]
+        if anchor:
+            at = group.index(anchor)
+            left, folio = anchor.x, anchor.text
+            if folio.isdecimal():
+                while at and group[at - 1].text.isdecimal() and -.002 <= left - group[at - 1].x - group[at - 1].width < .004:
+                    at -= 1
+                    folio = group[at].text + folio
+                    left = group[at].x
+            fragments = group[:at]
+            if fragments and fragments[-1].text.casefold() == "page" and left - .10 < fragments[-1].x:
+                fragments = fragments[:-1]
+        title = join_contents_title(fragments)
+        if len(title) > 220 or not any(char.isalpha() for char in title):
+            continue
+        title = re.sub(r"^(\d+\.\d+)\.?\s+_+\s*", r"\1 ", title)
+        line = replace(fragments[0], text=title)
+        if (folio and rows and rows[-1][2] is None and not NUMBERED.match(title)
+                and line.x - rows[-1][0].x > .012 and 0 < line.y - rows[-1][0].y < .039):
+            start, previous, _ = rows.pop()
+            title = previous + " " + title
+            line = replace(start, text=title)
+        rows.append((line, title, folio.casefold() if folio else None))
+
+    if sum(folio is not None for _, _, folio in rows) < 3:
+        return []
+    for index in range(1, len(rows) - 1):
+        line, title, folio = rows[index]
+        before = TOC_NUMBERED.match(rows[index - 1][1])
+        after = TOC_NUMBERED.match(rows[index + 1][1])
+        damaged = CHAPTER_NUMBER.match(title)
+        if before and after and damaged:
+            older, a = before[1].rsplit(".", 1)
+            newer, b = after[1].rsplit(".", 1)
+            expected = older + str(int(a) + 1)
+            if older == newer and int(b) == int(a) + 2 and damaged[0].strip() == expected:
+                title = older + "." + str(int(a) + 1) + " " + title[damaged.end():]
+                rows[index] = replace(line, text=title), title, folio
+    return [(line, title, folio, None, None, False) for line, title, folio in rows]
 
 
 def read_contents(pages, pdf, resolver):
@@ -473,7 +503,7 @@ def read_contents(pages, pdf, resolver):
         rows = bounded_folio_rows(lines, links)
         if not rows and explicit and not links:
             below = [line for line in lines if line.y > heading.y + heading.height + .003]
-            rows = bounded_folio_rows(below, printed_folio_boxes(below))
+            rows = printed_contents_rows(below)
         if not rows:
             rows = contents_rows(lines, links, explicit)
         destinations = sum(folio is not None or target is not None for _, _, folio, target, _, _ in rows)
@@ -506,14 +536,20 @@ def read_contents(pages, pdf, resolver):
         base = 2 if parts else 1
         if folio is None and target is None:
             next_number = next(
-                (number for following, next_title, *_ in collected[index + 1:index + 3]
+                (following_number for following, next_title, *_ in collected[index + 1:index + 3]
                  if following.page == line.page and 0 < following.y - line.y < .09
-                 and (number := TOC_NUMBERED.match(next_title))),
+                 and (following_number := TOC_NUMBERED.match(next_title))),
                 None,
             )
-            if APPENDICES.fullmatch(title):
+            if number and "." in number[1]:
+                prefix = number[1].split(".")[0]
+                level = base + number[1].count(".") + int(has_appendix_group and prefix.isalpha())
+                chapter_prefix = prefix
+            elif APPENDICES.fullmatch(title):
                 inside_appendices = True
                 level = 1
+            elif SECTION.fullmatch(title):
+                level = base
             elif BOOK_UNIT.match(title) and (next_number or APPENDIX.match(title)):
                 level = 2 if inside_appendices else base
             elif next_number and (title.isupper() or CHAPTER_NUMBER.match(title)):
@@ -830,10 +866,13 @@ def resolve_contents(rows, pages, pdf, *, alternatives=False):
             previous = entry.page
             continue
         labeled = [index for index in labels.get(entry.folio, []) if index not in excluded]
-        if not labeled and entry.folio:
-            labeled = printed.get(read_folio(entry.folio), [])
+        folio = read_folio(entry.folio) if entry.folio else None
+        if not labeled and folio:
+            labeled = printed.get(folio, [])
         forward = [index for index in candidates if index >= previous]
-        if len(labeled) == 1 and labeled[0] >= previous:
+        if not labels and folio and folio[0] == "roman" and len(forward) == 1 and candidates[forward[0]].y >= .095:
+            page = forward[0]
+        elif len(labeled) == 1 and labeled[0] >= previous:
             page = labeled[0]
         elif len(forward) == 1:
             page = forward[0]

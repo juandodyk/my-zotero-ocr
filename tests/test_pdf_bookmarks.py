@@ -256,6 +256,42 @@ class BookmarksTests(unittest.TestCase):
             ("1.2 The headlands", 6, 2),
         ])
 
+    def test_contents_keeps_missing_folios_and_corrects_stale_front_matter_numbers(self):
+        c = canvas.Canvas(str(self.source), pagesize=(432, 648))
+        c.setFont("Helvetica-Bold", 18)
+        c.drawString(150, 570, "Contents")
+        c.setFont("Helvetica", 10)
+        entries = [
+            ("Preface", "iv"), ("Advice to the Reader", "v"),
+            ("1 The Coast", None), ("1.1 Basin", None), ("1.2 The Headlands", "3"),
+            ("13 Forecasting", "4"), ("1.4 The Harbor", "5"), ("Index", "6")
+        ]
+        for index, (title, folio) in enumerate(entries):
+            y = 520 - index * 13
+            c.drawString(50, y, title)
+            if folio:
+                c.drawRightString(354 if title == "Index" else 360, y, folio)
+        c.showPage()
+
+        body = [("ii", "Preface"), ("iii", "Notes"), ("iv", "Advice to the Reader"),
+                ("v", "Other notes"), ("1", "The Coast"), ("2", "1.1 Basin"),
+                ("3", "Body"), ("4", "Body"), ("5", "Body"), ("6", "Index")]
+        for folio, title in body:
+            c.setFont("Helvetica", 10)
+            c.drawRightString(360, 609, folio)
+            c.setFont("Helvetica-Bold", 18)
+            c.drawString(55, 520, title)
+            c.showPage()
+        c.save()
+
+        result = self.run_helper("--output", self.output)
+        self.assertEqual((result["status"], result["count"], result["unresolved"]), ("added", 8, 0))
+        self.assertEqual([item[:3] for item in self.outline()], [
+            ("Preface", 2, 1), ("Advice to the Reader", 4, 1),
+            ("1 The Coast", 6, 1), ("1.1 Basin", 7, 2), ("1.2 The Headlands", 8, 2),
+            ("1.3 Forecasting", 9, 2), ("1.4 The Harbor", 10, 2), ("Index", 11, 1),
+        ])
+
     def test_unlinked_printed_contents_uses_chapter_starts(self):
         self.make_book()
         result = self.run_helper("--output", self.output)
