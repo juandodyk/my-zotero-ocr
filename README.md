@@ -209,7 +209,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 ## Install
 
 Run `./build.sh`, then in Zotero open **Tools → Plugins**, choose **Install
-Plugin From File**, and select `build/lossless-ocr-for-zotero-1.9.9.xpi`.
+Plugin From File**, and select `build/lossless-ocr-for-zotero-1.9.10.xpi`.
 Published releases provide the same versioned XPI on GitHub.
 
 This is a full replacement for the earlier local “OCRmyPDF for Zotero”

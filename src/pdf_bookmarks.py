@@ -1083,7 +1083,7 @@ def layout_headings(pages):
             known = appendix_group or SECTION.fullmatch(title) is not None
             unit = BOOK_UNIT.match(title)
             large = bool(body and line.size >= body * 1.16)
-            strong = large or line.bold and line.partial_bold_prefix is None
+            strong = large or line.bold
             if (len(normalized(title)) < 3 or CAPTION.match(title) or CONTENTS.fullmatch(title)
                     or DATE.fullmatch(title) or re.search(r"[@]|https?://|[;,]$", title)
                     or len(occurrence.get(normalized(line.text), ())) > 1 and not (known and strong)):
@@ -1103,6 +1103,9 @@ def layout_headings(pages):
                 if (root.isdecimal() and not 0 < int(root) < 100
                         or len(title) >= 105 or not title[0].isupper()):
                     continue
+                if (previous and abs(previous.y - line.y) <= .004
+                        and CAPTION.match(f"{previous.text} {line.text}")):
+                    continue
                 parent = label.rpartition(".")[0]
                 recovered = end > index
                 if (recovered or root.isalpha()) and parent and not (
@@ -1113,6 +1116,8 @@ def layout_headings(pages):
                 centered_section = (not parent and centered and title.isupper()
                                     and (previous is None or line.y - previous.y > gap)
                                     and (following is None or following.y - line.y > gap))
+                if recovered and not parent and root.isdecimal() and not (strong or centered_section):
+                    continue
                 styled = recovered and (line.bold or line.italic)
                 suggested = strong or known or centered_section or styled
                 if suggested or separated and len(title) <= 65:

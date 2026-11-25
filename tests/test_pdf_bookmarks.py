@@ -522,6 +522,24 @@ class BookmarksTests(unittest.TestCase):
             ("A.1. Selection rule.", 2, 3), ("Supplementary Data", 2, 1)
         ])
 
+    def test_layout_preserves_mixed_style_headings_and_excludes_lists_and_captions(self):
+        line = bookmarks.Line
+        pages = {0: [
+            line(0, "1. FIRST SECTION", .40, .20, .20, 10, height=.012),
+            line(0, "This is a paragraph with enough text to identify the body font.", .1, .22, .60, 10),
+            line(0, "Historical Background", .1, .31, .17, 10, bold=True, partial_bold_prefix=""),
+            line(0, "This is another standalone paragraph in the ordinary font size.", .1, .35, .64, 10),
+            line(0, "2.", .12, .43, .02, 10),
+            line(0, "Describe the source in detail.", .16, .43, .22, 10, italic=True),
+            line(0, "This text continues the list item with additional context.", .16, .45, .60, 10),
+            line(0, "Table", .1, .53, .04, 10),
+            line(0, "3. Summary Statistics", .15, .53, .18, 10, bold=True, partial_bold_prefix="3."),
+            line(0, "References", .1, .63, .09, 10)
+        ]}
+        self.assertEqual([(entry.title, entry.suggested) for entry in bookmarks.layout_headings(pages)], [
+            ("1. FIRST SECTION", True), ("Historical Background", True), ("References", True)
+        ])
+
     def test_tagged_heading_uses_structure_at_body_font_size(self):
         c = canvas.Canvas(str(self.source))
         c.setFont("Helvetica", 11)
