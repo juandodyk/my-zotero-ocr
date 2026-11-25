@@ -2,7 +2,7 @@
 set -eu
 export PYTHONDONTWRITEBYTECODE=1
 
-for command in ocrmypdf qpdf pdfinfo pdftotext pdfimages pdftoppm python3; do
+for command in ocrmypdf qpdf pdfinfo pdftotext pdfimages pdftoppm pdftohtml tesseract python3; do
 	if ! command -v "$command" >/dev/null 2>&1; then
 		printf 'missing required test command: %s\n' "$command" >&2
 		exit 1
@@ -25,6 +25,7 @@ progress_log="$work_dir/progress.log"
 cleanup_log="$work_dir/cleanup.log"
 ocrmypdf_python="$(sed -n '1s/^#!//p' "$(command -v ocrmypdf)")"
 "$ocrmypdf_python" tests/test_invisible_cleanup.py
+"$ocrmypdf_python" tests/test_pdf_bookmarks.py
 
 python3 tests/make_fixture.py "$input"
 python3 tests/make_born_digital_fixture.py "$work_dir/born-digital.pdf"

@@ -88,6 +88,39 @@ page images, and stamps whose wording or position changes on every page, cannot
 be detected this way. The menu wording deliberately says “detect” because no
 safe PDF tool can identify every possible watermark automatically.
 
+## PDF bookmarks
+
+Right-click one or more PDF attachments or their parent items and choose
+**Add PDF Bookmarks**. Bookmarks are embedded in the PDF and appear in the
+reader’s **Document Outline** when you reopen it. A parent selection covers
+its eligible PDF attachments. An existing outline is kept. The attachment key
+and Zotero annotations are preserved.
+
+Books use their printed contents, internal links, page labels, and verified
+chapter starts. Papers use tagged headings or text layout. On image-only books
+the helper uses Tesseract on selected front-matter pages and likely chapter
+starts. It leaves an ambiguous book unchanged until its candidates are reviewed.
+The process is local and makes no model or network calls.
+
+Enable **Add PDF bookmarks when running OCR** in the extension’s Zotero settings
+to generate them from the new text layer. A born-digital PDF can receive
+bookmarks when OCR itself is skipped.
+
+The same helper works on a standalone PDF. Use Python with `pikepdf` installed
+(such as OCRmyPDF’s own interpreter) and Poppler’s `pdftohtml` and `pdfinfo`
+on your path. Scanned input also uses `pdftoppm` and Tesseract.
+
+```sh
+python src/pdf_bookmarks.py paper.pdf
+python src/pdf_bookmarks.py paper.pdf --output paper-bookmarked.pdf
+python src/pdf_bookmarks.py book.pdf --choices choices.json --output book-bookmarked.pdf
+```
+
+Preview returns candidate IDs, levels, and one-based PDF pages. A choices file
+is a JSON list such as `[{"id":1,"level":1},{"id":3,"level":2}]`. Choose
+candidates from a preview of the same PDF with the same OCR options. Candidates
+without resolved destinations cannot be selected.
+
 ## Preservation recipe
 
 The processing arguments are intentionally fixed:
@@ -157,7 +190,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 ## Install
 
 Run `./build.sh`, then in Zotero open **Tools → Plugins**, choose **Install
-Plugin From File**, and select `build/lossless-ocr-for-zotero-1.8.0.xpi`.
+Plugin From File**, and select `build/lossless-ocr-for-zotero-1.9.0.xpi`.
 Published releases provide the same versioned XPI on GitHub.
 
 This is a full replacement for the earlier local “OCRmyPDF for Zotero”

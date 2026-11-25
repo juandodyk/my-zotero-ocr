@@ -1,4 +1,5 @@
 var LosslessOCRForZotero;
+var LosslessOCRBookmarkAPI;
 
 function log(message) {
 	Zotero.debug("Lossless OCR for Zotero: " + message);
@@ -20,6 +21,9 @@ async function startup({ id, version, rootURI }) {
 	Services.scriptloader.loadSubScript(rootURI + "lossless-ocr-for-zotero.js");
 	LosslessOCRForZotero.init({ id, version, rootURI });
 	LosslessOCRForZotero.addToAllWindows();
+	const extension = LosslessOCRForZotero;
+	LosslessOCRBookmarkAPI = { run: (items, options) => extension.bookmarkItems(items, options) };
+	Zotero.LosslessOCRBookmarks = LosslessOCRBookmarkAPI;
 }
 
 function onMainWindowLoad({ window }) {
@@ -32,6 +36,8 @@ function onMainWindowUnload({ window }) {
 
 function shutdown() {
 	log("Shutting down");
+	if (Zotero.LosslessOCRBookmarks === LosslessOCRBookmarkAPI) delete Zotero.LosslessOCRBookmarks;
+	LosslessOCRBookmarkAPI = undefined;
 	LosslessOCRForZotero.removeFromAllWindows();
 	LosslessOCRForZotero = undefined;
 }

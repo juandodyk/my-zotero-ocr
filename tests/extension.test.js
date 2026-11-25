@@ -79,7 +79,8 @@ assert.deepEqual(
 	menu.children.map(item => item.id),
 	[
 		"lossless-ocr-for-zotero-item-menu",
-		"lossless-ocr-for-zotero-watermark-menu"
+		"lossless-ocr-for-zotero-watermark-menu",
+		"lossless-ocr-for-zotero-bookmarks-menu"
 	]
 );
 assert.equal(
@@ -91,7 +92,7 @@ assert.equal(typeof menu.children[1].listeners.command, "function");
 
 // Adding the same window again must not duplicate either command.
 extension.addToWindow(window);
-assert.equal(menu.children.length, 2);
+assert.equal(menu.children.length, 3);
 
 assert.equal(
 	JSON.stringify(extension.parseHelperJSON('{"pages":2,"candidates":[]}', "test")),
@@ -265,7 +266,49 @@ async function testWatermarkChecklist() {
 	assert.equal(await dialog.result, null);
 }
 
-Promise.resolve().then(testBundledResourceLoading).then(testProcessExitCodes).then(testWatermarkChecklist).then(() => {
+async function testBookmarkAttachmentUpdates() {
+	const events = [];
+	const source = "/zotero/storage/BOOK/paper.pdf";
+	let sourceChanged = false;
+	const item = {
+		async getFilePathAsync() { return source; },
+		isEditable() { return true; }
+	};
+	context.PathUtils = { tempDir: "/tmp", parent: path => path.slice(0, path.lastIndexOf("/")), join: (...parts) => parts.join("/") };
+	context.IOUtils = {
+		async stat() { return { size: 123, lastModified: sourceChanged ? 2 : 1 }; },
+		async makeDirectory() {},
+		async copy(_, staged) { events.push(["stage", staged]); },
+		async move(_, destination, options) {
+			assert.equal(options.noOverwrite, false);
+			events.push(["replace", destination]);
+		},
+		async remove() {}
+	};
+	context.Zotero.File.removeIfExists = async () => {};
+	extension.refreshAndReindex = async (updated, _, options) => {
+		assert.equal(updated, item);
+		assert.equal(options.reindex, false);
+		events.push(["refresh"]);
+	};
+	extension.generateBookmarks = async ({ outputPath }) => ({ status: outputPath ? "added" : "preview" });
+	const job = { pdfItem: item, tools: {} };
+	assert.equal((await extension.processBookmarkPDF(job)).status, "preview");
+	assert.deepEqual(events, []);
+	assert.equal((await extension.processBookmarkPDF({ ...job, apply: true })).status, "added");
+	assert.deepEqual(events.map(event => event[0]), ["stage", "replace", "refresh"]);
+	assert.equal(events[1][1], source);
+
+	events.length = 0;
+	extension.generateBookmarks = async () => {
+		sourceChanged = true;
+		return { status: "added" };
+	};
+	await assert.rejects(extension.processBookmarkPDF({ ...job, apply: true }), /attachment changed/);
+	assert.deepEqual(events.map(event => event[0]), ["stage"]);
+}
+
+Promise.resolve().then(testBundledResourceLoading).then(testProcessExitCodes).then(testWatermarkChecklist).then(testBookmarkAttachmentUpdates).then(() => {
 	console.log("extension wiring and process exit tests passed");
 }).catch(error => {
 	console.error(error);
