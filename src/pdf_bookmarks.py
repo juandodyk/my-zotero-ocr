@@ -39,6 +39,7 @@ SECTION = re.compile(
     r"references|bibliography|appendix(?:\s+[\w]+)?|supplementary materials?|"
     r"preface|foreword|index)$", re.I
 )
+DATE = re.compile(r"^(?:[A-Za-z]+\s+)?\d{1,2},?\s+\d{4}$|^\d{4}[-/]\d{1,2}[-/]\d{1,2}$")
 CAPTION = re.compile(r"^(?:fig(?:ure)?\.?|table|equation|scheme|plate|algorithm|listing)\s+[\dA-Z]+\b", re.I)
 
 
@@ -281,12 +282,14 @@ def read_contents(pages, pdf, resolver):
     started = False
     for index, lines in sorted(pages.items()):
         explicit = any(CONTENTS.fullmatch(line.text.strip(":")) for line in lines)
-        if not (explicit or started) and not lines:
-            continue
-        links = link_rows(pdf.pages[index], resolver) if explicit or started or len(lines) < 70 else []
-        rows = contents_rows(lines, links, explicit or started)
-        if not (explicit or started) and sum(folio is not None for _, _, folio, _, _ in rows) < 3:
-            continue
+        if not (explicit or started):
+            # An unlabeled list needs visible TOC evidence before links or
+            # aligned numbers are considered; papers often have citation links.
+            leaders = sum(bool(match and not match[2].isspace() and read_folio(match[3]))
+                          for line in lines if (match := FOLIO.fullmatch(line.text)))
+            if leaders < 3:
+                continue
+        rows = contents_rows(lines, link_rows(pdf.pages[index], resolver), explicit or started)
         minimum = 1 if explicit or started and any(target is not None for _, _, _, target, _ in rows) else 2
         if len(rows) >= (minimum if explicit or started else 3):
             collected.extend(rows)
@@ -486,54 +489,73 @@ def tagged_headings(path, pages, tool):
 
 
 def layout_headings(pages):
-    lines = [line for group in pages.values() for line in group if .045 <= line.y <= .94]
     body_sizes = Counter()
     occurrence = defaultdict(set)
-    for line in lines:
-        if len(line.text) > 45:
-            body_sizes[round(line.size)] += len(line.text)
-        occurrence[normalized(line.text)].add(line.page)
+    for group in pages.values():
+        for line in group:
+            if not .045 <= line.y <= .94:
+                continue
+            if len(line.text) > 45:
+                body_sizes[round(line.size)] += len(line.text)
+            occurrence[normalized(line.text)].add(line.page)
     body = body_sizes.most_common(1)[0][0] if body_sizes else 0
     headings = []
-    numbered = []
     for page, group in pages.items():
+        skip_through = -1
         for index, line in enumerate(group):
-            if not .045 <= line.y <= .94 or not (3 <= len(line.text) <= 140):
+            if index <= skip_through or not .045 <= line.y <= .94 or not 3 <= len(line.text) <= 140:
                 continue
             number = NUMBERED.match(line.text)
             title = line.text[number.end():] if number else line.text
-            if (len(normalized(title)) < 3 or CAPTION.match(title) or CONTENTS.fullmatch(title)
-                    or re.search(r"[@]|https?://|[;,]$", title)
-                    or len(occurrence[normalized(line.text)]) > 1):
-                continue
             known = SECTION.fullmatch(title) is not None
-            if page == 0 and line.y < .20 and not (known or number):
-                continue
+            unit = BOOK_UNIT.match(title)
             large = bool(body and line.size >= body * 1.16)
             strong = large or line.bold
+            if (len(normalized(title)) < 3 or CAPTION.match(title) or CONTENTS.fullmatch(title)
+                    or DATE.fullmatch(title) or re.search(r"[@]|https?://|[;,]$", title)
+                    or len(occurrence[normalized(line.text)]) > 1 and not (known and strong)):
+                continue
+            centered = abs(line.x + line.width / 2 - .5) < .05
+            if not (known or number or unit) and (
+                page == 0 and line.y < .20 or page < 6 and line.y < .28 and centered and large
+            ):
+                continue
             previous = group[index - 1] if index else None
             following = group[index + 1] if index + 1 < len(group) else None
             separated = (previous is None or line.y - previous.y > .025) and (
                 following is None or following.y - line.y > .022)
-            if number and len(title) < 105:
-                numbered.append((page, line, number[1], strong or separated or known))
-            elif known or BOOK_UNIT.match(title) and strong or strong and separated and len(title) <= 95:
-                # A known heading with the body font is useful for OCRed papers.
-                headings.append((line, known or strong, None))
-    plausible_numbering = sum(strong for _, _, _, strong in numbered) >= 2
-    headings.extend((line, strong, number) for _, line, number, strong in numbered if plausible_numbering or strong)
-    if sum(suggested for _, suggested, _ in headings) < 2:
-        headings = [(line, False, number) for line, _, number in headings]
-    order = {id(line): index for page in pages.values() for index, line in enumerate(page)}
-    headings.sort(key=lambda item: (item[0].page, order[id(item[0])]))
-    heading_sizes = sorted({round(line.size) for line, yes, number in headings
-                            if yes and not number and body and line.size >= body * 1.16}, reverse=True)
+            if number:
+                root = int(number[1].split(".")[0])
+                if not 0 < root < 100 or len(title) >= 105 or not title[0].isupper():
+                    continue
+                if strong or known or separated and len(title) <= 65:
+                    headings.append((line, line.text, strong or known, number[1]))
+                continue
+            # Join a prominent centered heading wrapped across two lines.
+            if (large and centered and following and body and line.size >= body * 1.45
+                    and 0 < following.y - line.y <= .038 and following.size == line.size
+                    and abs(following.x + following.width / 2 - .5) < .05
+                    and 3 <= len(following.text) <= 45 and not SECTION.fullmatch(following.text)
+                    and not NUMBERED.match(following.text)):
+                headings.append((line, line.text + " " + following.text, True, None))
+                skip_through = index + 1
+            elif known or unit and strong or strong and separated and len(title) <= 95:
+                headings.append((line, line.text, True, None))
+    enough_headings = sum(suggested for _, _, suggested, _ in headings) >= 2
+    size_counts = Counter(round(line.size) for line, _, yes, number in headings
+                          if yes and not number and body and line.size >= body * 1.16)
+    ranks = sorted(size_counts, reverse=True)
+    if ranks:
+        # A single oversized title (e.g. an appendix cover) is at the same
+        # level as regular section titles, rather than parenting the paper.
+        top = next((size for size in ranks if size_counts[size] > 1), ranks[0])
+        ranks = [size for size in ranks if size <= top]
     entries = []
-    for line, suggested, number in headings:
+    for line, title, suggested, number in headings:
         level = number.count(".") + 1 if number else 1
-        if number is None and round(line.size) in heading_sizes:
-            level = min(3, 1 + heading_sizes.index(round(line.size)))
-        entries.append(Entry(line.text, level, line.page, line.y, suggested=suggested))
+        if number is None and round(line.size) in ranks:
+            level = min(3, 1 + ranks.index(round(line.size)))
+        entries.append(Entry(title, level, line.page, line.y, suggested=suggested and enough_headings))
     return entries
 
 

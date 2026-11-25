@@ -131,6 +131,35 @@ class BookmarksTests(unittest.TestCase):
             ("1. Introduction", 1, 1), ("1.1. Setting", 1, 2), ("2. Results", 2, 1), ("References", 2, 1)
         ])
 
+    def test_paper_citation_links_and_numbered_body_do_not_make_outline_entries(self):
+        c = canvas.Canvas(str(self.source))
+        for page, heading in enumerate(("Introduction", "Conclusion")):
+            if page:
+                c.bookmarkPage("references")
+            c.setFont("Helvetica-Bold", 14)
+            c.drawString(55, 650, heading)
+            c.setFont("Helvetica", 11)
+            for index, text in enumerate((
+                "A paragraph ends with a citation and its number",
+                "This other paragraph ends with a different citation",
+                "One more sentence ends at another linked reference",
+                "0.7 is the coefficient reported in the last specification",
+                "1. A numbered list item begins with a plain body font",
+                "2. The next list item has the same body font"
+            )):
+                y = 590 - 23 * index
+                c.drawString(55, y, text)
+                if not page and index < 3:
+                    c.drawRightString(505, y, str(index + 1))
+                    c.linkRect("", "references", (55, y - 4, 510, y + 11), relative=0)
+            c.showPage()
+        c.save()
+        result = self.run_helper("--output", self.output)
+        self.assertEqual((result["method"], result["count"]), ("headings", 2))
+        self.assertEqual([entry[:3] for entry in self.outline()], [
+            ("Introduction", 1, 1), ("Conclusion", 2, 1)
+        ])
+
     def test_tagged_heading_uses_structure_at_body_font_size(self):
         c = canvas.Canvas(str(self.source))
         c.setFont("Helvetica", 11)
