@@ -920,9 +920,11 @@ def save_verified_outline(pdf, output, expected):
         os.link(path, output)
 
 
-def output_entries(pdf, output, selected):
+def output_entries(pdf, output, selected, *, replace_existing=False):
     expected = []
     with pdf.open_outline(max_depth=32) as outline:
+        if replace_existing:
+            outline.root.clear()
         stack = []
         for entry in selected:
             level = min(entry.level, len(stack) + 1)
@@ -1052,7 +1054,7 @@ def generate(args):
         raise ValueError(f"Output already exists: {output}")
     with pikepdf.Pdf.open(path, attempt_recovery=False) as pdf:
         has_outline = "/First" in pdf.Root.get("/Outlines", {})
-        if has_outline and not args.refresh:
+        if has_outline and not (args.refresh or args.replace_existing):
             return {"status": "existing", "count": 0}
         if pdf.is_encrypted or signed(pdf):
             return {"status": "protected", "count": 0}
@@ -1110,8 +1112,8 @@ def generate(args):
         if output is None or args.candidates:
             result["candidates"] = report_candidates(entries)
         if output is not None and selected and not needs_review:
-            output_entries(pdf, output, selected)
-            result["status"] = "added"
+            output_entries(pdf, output, selected, replace_existing=has_outline)
+            result["status"] = "replaced" if has_outline else "added"
         return result
 
 
@@ -1119,7 +1121,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input")
     parser.add_argument("--output", help="New PDF path. Omit for a candidate preview.")
-    parser.add_argument("--refresh", action="store_true", help="Update uniquely matched titles in an existing outline.")
+    existing_outline = parser.add_mutually_exclusive_group()
+    existing_outline.add_argument("--refresh", action="store_true", help="Update uniquely matched titles in an existing outline.")
+    existing_outline.add_argument("--replace-existing", action="store_true", help="Replace the entire existing outline.")
     parser.add_argument("--choices", help="JSON file containing reviewed candidate IDs and levels.")
     parser.add_argument("--candidates", action="store_true", help="Include candidates even when writing a PDF.")
     parser.add_argument("--language", default="eng")

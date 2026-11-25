@@ -80,8 +80,7 @@ assert.deepEqual(
 	[
 		"lossless-ocr-for-zotero-item-menu",
 		"lossless-ocr-for-zotero-watermark-menu",
-		"lossless-ocr-for-zotero-bookmarks-menu",
-		"lossless-ocr-for-zotero-refresh-bookmarks-menu"
+		"lossless-ocr-for-zotero-bookmarks-menu"
 	]
 );
 assert.equal(
@@ -93,7 +92,7 @@ assert.equal(typeof menu.children[1].listeners.command, "function");
 
 // Adding the same window again must not duplicate either command.
 extension.addToWindow(window);
-assert.equal(menu.children.length, 4);
+assert.equal(menu.children.length, 3);
 
 assert.equal(
 	JSON.stringify(extension.parseHelperJSON('{"pages":2,"candidates":[]}', "test")),
@@ -302,22 +301,36 @@ async function testBookmarkAttachmentUpdates() {
 	assert.equal(events[1][1], source);
 
 	events.length = 0;
-	extension.generateBookmarks = async ({ outputPath, refresh }) => {
+	let replacementStatus = "replaced";
+	let runs = [];
+	extension.generateBookmarks = async ({ outputPath, replaceExisting }) => {
 		assert.ok(outputPath);
-		assert.equal(refresh, true);
-		return { status: "refreshed", count: 1, changes: [{ oldTitle: "Chapter", title: "5 Chapter" }] };
+		runs.push(Boolean(replaceExisting));
+		return { status: replaceExisting ? replacementStatus : "existing" };
 	};
-	const preview = message => {
-		assert.match(message, /Chapter → 5 Chapter/);
+	const apply = { ...job, apply: true };
+	const prompt = message => {
+		assert.match(message, /Do you want to replace the bookmarks\?/);
 		assert.deepEqual(events, []);
 	};
-	const refresh = { ...job, apply: true, refresh: true };
-	const cancel = { confirm(message) { preview(message); return false; } };
-	assert.equal((await extension.processBookmarkPDF({ ...refresh, window: cancel })).status, "cancelled");
+	const cancel = { confirm(message) { prompt(message); return false; } };
+	assert.equal((await extension.processBookmarkPDF({ ...apply, window: cancel })).status, "cancelled");
+	assert.deepEqual(runs, [false]);
 	assert.deepEqual(events, []);
-	const confirm = { confirm(message) { preview(message); return true; } };
-	assert.equal((await extension.processBookmarkPDF({ ...refresh, window: confirm })).status, "refreshed");
+
+	runs = [];
+	const confirm = { confirm(message) { prompt(message); return true; } };
+	assert.equal((await extension.processBookmarkPDF({ ...apply, window: confirm })).status, "replaced");
+	assert.deepEqual(runs, [false, true]);
 	assert.deepEqual(events.map(event => event[0]), ["stage", "replace", "refresh"]);
+
+	events.length = 0;
+	replacementStatus = "insufficient";
+	assert.equal((await extension.processBookmarkPDF({ ...apply, window: confirm })).status, "insufficient");
+	assert.deepEqual(events, []);
+	runs = [];
+	assert.equal((await extension.processBookmarkPDF(apply)).status, "existing");
+	assert.deepEqual(runs, [false]);
 
 	events.length = 0;
 	extension.generateBookmarks = async () => {

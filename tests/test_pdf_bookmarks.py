@@ -85,6 +85,38 @@ class BookmarksTests(unittest.TestCase):
                                                 "-l", str(n), "-singlefile", str(path)])
             self.assertEqual(render(self.source), render(self.output))
 
+    def test_explicit_replacement_discards_the_old_outline(self):
+        self.make_book(with_links=True)
+        with pikepdf.Pdf.open(self.source, allow_overwriting_input=True) as pdf:
+            with pdf.open_outline() as outline:
+                old = pikepdf.OutlineItem("Old chapter", 1)
+                old.children.append(pikepdf.OutlineItem("Old section", 2))
+                outline.root.append(old)
+            pdf.save(self.source)
+        original = self.source.read_bytes()
+        self.assertEqual(self.run_helper("--output", self.output)["status"], "existing")
+        self.assertFalse(self.output.exists())
+        result = self.run_helper("--replace-existing", "--output", self.output)
+        self.assertEqual((result["status"], result["count"]), ("replaced", 3))
+        self.assertEqual([item[:3] for item in self.outline()], [
+            ("1. The River", 2, 1), ("1.1. Tributaries", 3, 2), ("2. The Coast", 5, 1)
+        ])
+        self.assertEqual(self.source.read_bytes(), original)
+
+    def test_replacement_with_no_reliable_bookmarks_leaves_the_original(self):
+        c = canvas.Canvas(str(self.source))
+        c.drawString(70, 600, "Ordinary text.")
+        c.showPage()
+        c.save()
+        with pikepdf.Pdf.open(self.source, allow_overwriting_input=True) as pdf:
+            with pdf.open_outline() as outline:
+                outline.root.append(pikepdf.OutlineItem("Original bookmark", 0))
+            pdf.save(self.source)
+        before = self.source.read_bytes()
+        self.assertEqual(self.run_helper("--replace-existing", "--output", self.output)["status"], "insufficient")
+        self.assertFalse(self.output.exists())
+        self.assertEqual(self.source.read_bytes(), before)
+
     def test_refresh_updates_titles_without_rebuilding_the_outline(self):
         self.make_book(with_links=True)
         first = Path(self.tmp.name) / "existing.pdf"

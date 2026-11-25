@@ -93,14 +93,11 @@ safe PDF tool can identify every possible watermark automatically.
 Right-click one or more PDF attachments or their parent items and choose
 **Add PDF Bookmarks**. Bookmarks are embedded in the PDF and appear in the
 reader’s **Document Outline** when you reopen it. A parent selection covers
-its eligible PDF attachments. An existing outline is kept. The attachment key
-and Zotero annotations are preserved.
-
-For an existing outline, choose **Refresh PDF Bookmark Titles…**. Zotero
-shows the old and proposed titles and asks for confirmation. The refresh
-updates only uniquely matched titles and preserves the existing tree, exact
-destinations, and any unmatched bookmarks. Conflicting math readings are
-reported separately for review.
+its eligible PDF attachments. If the PDF already has an outline, Zotero asks
+whether to replace it. Confirming rebuilds the whole outline. Cancelling or
+failing to generate a verified replacement leaves the existing outline in
+place. The attachment key and Zotero annotations are preserved. Bookmark
+generation during OCR keeps an existing outline.
 
 Books use their printed contents, internal links, page labels, and verified
 chapter starts. Papers use tagged headings or text layout. On image-only books
@@ -125,6 +122,7 @@ on your path. Scanned input also uses `pdftoppm` and Tesseract.
 python src/pdf_bookmarks.py paper.pdf
 python src/pdf_bookmarks.py paper.pdf --output paper-bookmarked.pdf
 python src/pdf_bookmarks.py paper-bookmarked.pdf --refresh
+python src/pdf_bookmarks.py paper-bookmarked.pdf --replace-existing --output paper-rebuilt.pdf
 python src/pdf_bookmarks.py book.pdf --choices choices.json --output book-bookmarked.pdf
 ```
 
@@ -206,7 +204,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 ## Install
 
 Run `./build.sh`, then in Zotero open **Tools → Plugins**, choose **Install
-Plugin From File**, and select `build/lossless-ocr-for-zotero-1.9.4.xpi`.
+Plugin From File**, and select `build/lossless-ocr-for-zotero-1.9.5.xpi`.
 Published releases provide the same versioned XPI on GitHub.
 
 This is a full replacement for the earlier local “OCRmyPDF for Zotero”
