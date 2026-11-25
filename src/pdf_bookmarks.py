@@ -9,6 +9,7 @@ import csv
 from difflib import SequenceMatcher
 import io
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -33,6 +34,12 @@ FOLIO = re.compile(r"^(.+?)((?:[.·]{2,}|…)\s*|\s+)(\d{1,5}|[ivxlcdm]{1,12})$"
 NUMBERED = re.compile(r"^(\d{1,3}(?:\.\d{1,3})*)(?:[.)])?\s+(?=\S)")
 TOC_NUMBERED = re.compile(r"^((?:\d{1,3}|[A-Z])(?:\.\d{1,3})+)(?:[.)])?\s+(?=\S)")
 CHAPTER_NUMBER = re.compile(r"^\d{1,3}[.)]?(?:\s|$)")
+PRINTED_CHAPTER = re.compile(r"^(?:chapter\s+)?(\d{1,3})[.)]?(?:\s|$)", re.I)
+MATH_NOTATION = re.compile(
+    r"\b\w+\s*[/=^_]\s*\w+|[α-ωΑ-Ω₀-₉ₐ-ₜ⁰-⁹²³¹±≤≥∑∫]|"
+    r"\b[A-Z]\s+(?:and|or)\s+[A-Z]\b"
+)
+ODD_MATH_GLYPH = re.compile(r"[�¢¤]|(?<=\w)\?(?=[-\w])")
 LEADER_RUN = re.compile(r"[.·…:]{2,}|[a-z]{12,}", re.I)
 APPENDICES = re.compile(r"^appendices$", re.I)
 APPENDIX = re.compile(r"^appendix\s+[a-z0-9]+(?:[:.\s]|$)", re.I)
@@ -58,6 +65,7 @@ class Line:
     width: float
     size: float
     bold: bool = False
+    height: float = 0
 
 
 @dataclass(frozen=True)
@@ -71,6 +79,8 @@ class Entry:
     suggested: bool = True
     group: int | None = None
     repair_title: bool = False
+    heading: Line | None = None
+    title_review: tuple[str, ...] | None = None
 
 
 def clean(value):
@@ -109,7 +119,7 @@ def read_layout(path, first, last, tool):
             x, y, width, height = (float(item.attrib[key]) for key in ("left", "top", "width", "height"))
             lines.append(Line(page_index, title, x / w, y / h, width / w,
                               sizes.get(item.attrib["font"], height),
-                              item.find(".//b") is not None))
+                              item.find(".//b") is not None, height / h))
         pages[page_index] = lines
     return pages
 
@@ -416,7 +426,46 @@ def read_contents(pages, pdf, resolver):
         raw_folio = FOLIO.fullmatch(line.text)
         repair_title = bool(raw_folio and strip_leaders(raw_folio[1])[1])
         entries.append((Entry(title, level, target, folio=folio, destination=dest, repair_title=repair_title), line.page))
-    return entries
+    return restore_chapter_numbers(entries, 2 if parts else 1)
+
+
+def restore_chapter_numbers(rows, level):
+    """Infer a lost numeral inside an otherwise numbered run of chapters."""
+    boundaries = [index for index, (entry, _) in enumerate(rows) if entry.level <= level]
+    run = []
+
+    def apply_run():
+        if sum(explicit for _, _, explicit in run) < 2:
+            return
+        for index, number, explicit in run:
+            if not explicit:
+                entry, toc_page = rows[index]
+                rows[index] = replace(entry, title=f"{number} {entry.title}"), toc_page
+
+    for index, end in zip(boundaries, boundaries[1:] + [len(rows)]):
+        entry = rows[index][0]
+        printed = PRINTED_CHAPTER.match(entry.title) if entry.level == level else None
+        children = [TOC_NUMBERED.match(child.title) for child, _ in rows[index + 1:end]
+                    if child.level == level + 1]
+        numbers = [number[1].split(".") for number in children if number and number[1].count(".") == 1]
+        prefixes = {prefix for prefix, _ in numbers}
+        sections = [int(section) for _, section in numbers]
+        prefix = numbers[0][0] if len(prefixes) == 1 and len(sections) >= 2 and sections == sorted(set(sections)) else ""
+        if printed and (not prefixes or set(prefixes) == {printed[1]}):
+            number = int(printed[1])
+        elif (entry.level == level and entry.page is None and entry.folio is None
+              and not (printed or BOOK_UNIT.match(entry.title) or APPENDICES.fullmatch(entry.title))
+              and prefix.isdecimal()):
+            number = int(prefix)
+        else:
+            number = 0
+        if not number or run and number != run[-1][1] + 1:
+            apply_run()
+            run.clear()
+        if number:
+            run.append((index, number, printed is not None))
+    apply_run()
+    return rows
 
 
 def recover_missing_contents_rows(rows, pages, pdf, path, args):
@@ -466,7 +515,7 @@ def heading_matches(entries, pages, excluded):
             for text in texts:
                 key = title_key(text)
                 if key in wanted and len(key) >= 3:
-                    matches[key].append(replace(line, text=text) if text != line.text else line)
+                    matches[key].append(replace(line, text=text, height=0) if text != line.text else line)
     return matches
 
 
@@ -491,6 +540,8 @@ def resolved_book_entry(entry, page, hits, pages):
         chapter = CHAPTER_NUMBER.match(title)
         if chapter:
             title = line.text if CHAPTER_NUMBER.match(line.text) else chapter[0].strip() + " " + line.text
+        elif entry.folio is None and PRINTED_CHAPTER.match(line.text):
+            title = line.text
         elif not NUMBERED.match(line.text):
             title = line.text
             if entry.level == 1 and entry.folio is None:
@@ -500,26 +551,122 @@ def resolved_book_entry(entry, page, hits, pages):
                                and 0 < line.y - candidate.y < .065), None)
                 if number:
                     title = number + " " + title
-    if entry.repair_title:
+    if entry.repair_title and (candidate := numbered_body_heading(entry, pages.get(page, []))):
+        line, title = candidate
+    return replace(entry, title=title, page=page, y=line.y if line else None, heading=line)
+
+
+def numbered_body_heading(entry, lines):
+    number = TOC_NUMBERED.match(entry.title)
+    current = title_key(entry.title)
+    options = []
+    for candidate in lines:
+        candidate_number = TOC_NUMBERED.match(candidate.text)
+        if not candidate_number or number and number[1] != candidate_number[1]:
+            continue
+        proposed = candidate.text
+        if candidate.y < .10 and entry.folio:
+            match = FOLIO.fullmatch(proposed)
+            if match and match[3].casefold() == entry.folio:
+                proposed = match[1]
+        ratio = SequenceMatcher(None, current, title_key(proposed)).ratio()
+        if ratio >= (.66 if number else .77):
+            options.append((candidate, proposed, ratio))
+    if options:
+        line, title, _ = max(options, key=lambda row: (row[0].y >= .10, row[2]))
+        return line, title
+
+
+def short_symbol_disagrees(left, right):
+    a, b = left.split(), right.split()
+    if len(a) != len(b):
+        return False
+    return any(x != y and all(re.fullmatch(r"[A-Z][A-Za-z0-9]{0,2}", token) for token in (x, y))
+               for x, y in zip(a, b))
+
+
+def heading_width(line, lines):
+    """Include a formula that Poppler emitted as adjacent text on this line."""
+    right = line.x + line.width
+    for fragment in sorted(lines, key=lambda item: item.x):
+        if (fragment.x > line.x and -.02 <= fragment.x - right < .04
+                and abs(fragment.y - line.y) < .005
+                and .8 * line.size <= fragment.size <= 1.2 * line.size):
+            right = max(right, fragment.x + fragment.width)
+    return right - line.x
+
+
+def heading_crop(path, page, line, args, resolution):
+    # Poppler XML and the raster use the same unrotated MediaBox.
+    x0, y0, x1, y1 = map(float, page.mediabox)
+    width, height = x1 - x0, y1 - y0
+    scale = resolution / 72
+    x = max(0, math.floor((width * line.x - 6) * scale))
+    y = max(0, math.floor((height * line.y - 4) * scale))
+    right = min(math.ceil(width * scale), math.ceil((width * (line.x + line.width) + 8) * scale))
+    line_height = max(height * line.height, line.size)
+    bottom = min(math.ceil(height * scale), math.ceil((height * line.y + line_height + 3) * scale))
+    number = str(line.page + 1)
+    image = spawn([args.pdftoppm, "-gray", "-r", str(resolution), "-f", number, "-l", number,
+                   "-x", str(x), "-y", str(y), "-W", str(right - x), "-H", str(bottom - y), "-singlefile", path])
+    text = spawn([args.tesseract, "stdin", "stdout", "-l", args.language, "--psm", "7"], image)
+    return clean(text.decode("utf-8"))
+
+
+def title_reading(text, expected):
+    number = TOC_NUMBERED.match(text)
+    if number is None or number[1] != expected:
+        return None
+    value = unicodedata.normalize("NFC", text[number.end():])
+    return re.sub(r"\s*([/=^_])\s*", r"\1", value)
+
+
+def review_math_titles(entries, rows, pages, pdf, path, args):
+    """Compare small heading crops for notation the text layer may have mangled."""
+    checked = 0
+    for index, entry in enumerate(entries):
         number = TOC_NUMBERED.match(entry.title)
-        options = []
-        for candidate in pages.get(page, []):
-            candidate_number = TOC_NUMBERED.match(candidate.text)
-            if not candidate_number or number and number[1] != candidate_number[1]:
-                continue
-            proposed = candidate.text
-            if candidate.y < .10 and entry.folio:
-                match = FOLIO.fullmatch(proposed)
-                if match and match[3].casefold() == entry.folio:
-                    proposed = match[1]
-            current = title_key(entry.title)
-            possible = title_key(proposed)
-            ratio = SequenceMatcher(None, current, possible).ratio()
-            if ratio >= (.66 if number else .77):
-                options.append((candidate, proposed, ratio))
-        if options:
-            line, title, _ = max(options, key=lambda row: (row[0].y >= .10, row[2]))
-    return replace(entry, title=title, page=page, y=line.y if line else None)
+        if not number or entry.page is None or not entry.suggested:
+            continue
+        source = rows[entry.group - 1 if entry.group is not None else index][0].title
+        texts = (source, entry.title)
+        suspicion = any(MATH_NOTATION.search(title) or ODD_MATH_GLYPH.search(title) for title in texts)
+        if not suspicion and not short_symbol_disagrees(*texts):
+            continue
+        page = pdf.pages[entry.page]
+        if page.rotation % 360 or not has_page_image(page):
+            continue
+        if entry.page not in pages:
+            pages.update(read_layout(path, entry.page, entry.page, args.pdftohtml))
+        lines = pages.get(entry.page, [])
+        candidate = numbered_body_heading(entry, lines)
+        line = candidate[0] if candidate else entry.heading
+        if not line or not line.height or line.y < .10:
+            continue
+        line = replace(line, width=heading_width(line, lines))
+        readings = []
+        baseline = title_reading(entry.title, number[1])
+        if checked < 10:
+            checked += 1
+            for resolution in (280, 360):
+                try:
+                    text = heading_crop(path, page, line, args, resolution)
+                except (OSError, ValueError, subprocess.TimeoutExpired):
+                    break
+                reading = title_reading(text, number[1])
+                if reading and SequenceMatcher(None, normalized(baseline), normalized(reading)).ratio() >= .78:
+                    readings.append(reading)
+        original = title_reading(source, number[1])
+        # Reuse a contents spelling only when both crops independently agree
+        # with it. Alternate OCR readings otherwise stay available for review.
+        if original and readings == [original, original] and not ODD_MATH_GLYPH.search(original):
+            if original != baseline:
+                entries[index] = replace(entry, title=f"{number[1]} {original}")
+            continue
+        variants = dict.fromkeys(reading for reading in [original, *readings] if reading and reading != baseline)
+        if variants or ODD_MATH_GLYPH.search(baseline):
+            entries[index] = replace(entry, title_review=tuple(f"{number[1]} {reading}" for reading in variants))
+
 
 
 def resolve_contents(rows, pages, pdf, *, alternatives=False):
@@ -796,8 +943,8 @@ def select_entries(entries, choices):
     selected = {}
     groups = set()
     for choice in choices:
-        if not isinstance(choice, dict) or set(choice) != {"id", "level"}:
-            raise ValueError("Each bookmark choice requires an id and a level.")
+        if not isinstance(choice, dict) or not {"id", "level"} <= choice.keys() <= {"id", "level", "title"}:
+            raise ValueError("Each bookmark choice requires an id and a level, with an optional title.")
         id_, level = choice["id"], choice["level"]
         if type(id_) is not int or not 1 <= id_ <= len(entries) or id_ in selected:
             raise ValueError(f"Unknown or duplicate bookmark candidate ID: {id_}")
@@ -808,6 +955,12 @@ def select_entries(entries, choices):
             raise ValueError(f"Multiple candidates selected for contents entry {entry.group}.")
         if entry.group is not None:
             groups.add(entry.group)
+        if "title" in choice:
+            title = choice["title"]
+            if (not isinstance(title, str) or not 1 <= len(title.strip()) <= 220
+                    or any(unicodedata.category(char) in {"Cc", "Cs"} for char in title)):
+                raise ValueError(f"Bookmark candidate {id_} has an invalid title.")
+            entry = replace(entry, title=title.strip(), title_review=None)
         selected[id_] = replace(entry, level=level)
     return [selected[id_] for id_ in sorted(selected)]
 
@@ -817,7 +970,8 @@ def report_candidates(entries):
              "page": entry.page + 1 if entry.page is not None else None,
              **({"printedPage": entry.folio} if entry.folio else {}),
              **({"group": entry.group} if entry.group is not None and (entry.page is None or not entry.suggested) else {}),
-             **({"suggested": False} if not entry.suggested or entry.page is None else {})}
+             **({"suggested": False} if not entry.suggested or entry.page is None else {}),
+             **({"titleReview": list(entry.title_review)} if entry.title_review is not None else {})}
             for index, entry in enumerate(entries, 1)]
 
 
@@ -860,6 +1014,8 @@ def generate(args):
                         and not any(enough_text(pages[index]) for index in range(after_contents, min(count, after_contents + 6)))):
                     probe_chapters(rows, pages, path, args)
                 entries = resolve_contents(rows, pages, pdf, alternatives=True)
+            if can_ocr:
+                review_math_titles(entries, rows, pages, pdf, path, args)
         else:
             pages.update(read_layout(path, front_end, count - 1, args.pdftohtml))
             method = "tags"
@@ -873,6 +1029,9 @@ def generate(args):
         needs_review = choices is None and unresolved > 0
         status = "preview" if output is None else "needs_review" if needs_review else "insufficient"
         result = {"status": status, "method": method, "count": len(selected), "unresolved": unresolved}
+        review_titles = [entry.title for entry in selected if entry.title_review is not None]
+        if review_titles:
+            result["titleWarnings"] = review_titles
         if output is None or args.candidates:
             result["candidates"] = report_candidates(entries)
         if output is not None and selected and not needs_review:

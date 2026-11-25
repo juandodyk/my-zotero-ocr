@@ -5,12 +5,16 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pikepdf
 from PIL import Image, ImageDraw, ImageFont
 from reportlab.pdfgen import canvas
 
 HELPER = Path(__file__).resolve().parents[1] / "src" / "pdf_bookmarks.py"
+sys.path.insert(0, str(HELPER.parent))
+import pdf_bookmarks as bookmarks
 
 
 class BookmarksTests(unittest.TestCase):
@@ -156,6 +160,54 @@ class BookmarksTests(unittest.TestCase):
             ("1.1 River Basin", 4, 2), ("1.2 Tributaries", 5, 2), ("Exercises", 6, 2),
             ("The Coast", 7, 1), ("2.1 Coastal Systems", 7, 2)
         ])
+
+    def test_chapter_numbers_need_a_numbered_run_and_consistent_children(self):
+        def row(title, level):
+            return bookmarks.Entry(title, level, None), 0
+
+        rows = [row("1 The River", 1), row("1.1 Basin", 2), row("THE OCEAN", 1),
+                row("2.1 Coast", 2), row("2.2 Tides", 2), row("3 The Lake", 1),
+                row("3.1 Fish", 2), row("THE BAY", 1), row("4.1 Estuary", 2),
+                row("5.2 Inlet", 2), row("5 The Sound", 1)]
+        updated = bookmarks.restore_chapter_numbers(rows, 1)
+        self.assertEqual([entry.title for entry, _ in updated if entry.level == 1],
+                         ["1 The River", "2 THE OCEAN", "3 The Lake", "THE BAY", "5 The Sound"])
+
+        entry = bookmarks.Entry("THE SOUND", 1, None)
+        hit = bookmarks.Line(8, "5 The Sound", .1, .2, .3, 16)
+        self.assertEqual(bookmarks.resolved_book_entry(entry, 8, {8: hit}, {}).title, "5 The Sound")
+
+    def test_math_crop_disagreement_can_be_reviewed_before_embedding(self):
+        c = canvas.Canvas(str(self.source))
+        c.setFont("Helvetica", 14)
+        c.drawString(55, 720, "1.1 The Geometry of Ay/K")
+        image = Image.new("RGB", (600, 700), "white")
+        image.putpixel((0, 0), (0, 0, 0))
+        image_path = Path(self.tmp.name) / "scan.png"
+        image.save(image_path)
+        c.drawImage(str(image_path), 10, 10, width=20, height=20)
+        c.showPage()
+        c.save()
+        heading = bookmarks.read_layout(str(self.source), 0, 0, "pdftohtml")[0][0]
+        entry = bookmarks.Entry(heading.text, 2, 0, heading=heading)
+        args = SimpleNamespace(pdftohtml="pdftohtml")
+
+        with pikepdf.Pdf.open(self.source) as pdf:
+            candidates = [entry]
+            with patch.object(bookmarks, "heading_crop", side_effect=[
+                "1.1 The Geometry of A;/K", "1.1 The Geometry of Ay/K"
+            ]) as crop:
+                bookmarks.review_math_titles(candidates, [(entry, 0)], {0: [heading]}, pdf, str(self.source), args)
+            self.assertEqual(crop.call_count, 2)
+            self.assertEqual(candidates[0].title, entry.title)
+            self.assertEqual(bookmarks.report_candidates(candidates)[0]["titleReview"],
+                             ["1.1 The Geometry of A;/K"])
+
+            reviewed = bookmarks.select_entries(candidates, [{"id": 1, "level": 1,
+                                                               "title": "1.1 The Geometry of Aₖ/K"}])
+            self.assertIsNone(reviewed[0].title_review)
+            bookmarks.output_entries(pdf, self.output, reviewed)
+        self.assertEqual(self.outline()[0][:3], ("1.1 The Geometry of Aₖ/K", 1, 1))
 
     def test_paper_headings_exclude_title_captions_and_running_headers(self):
         c = canvas.Canvas(str(self.source))

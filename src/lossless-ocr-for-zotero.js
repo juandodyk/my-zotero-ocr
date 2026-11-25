@@ -7,6 +7,13 @@ function losslessOCRLog(message) {
 	Zotero.debug("Lossless OCR for Zotero: " + message);
 }
 
+function bookmarkTitleWarning(result) {
+	if (!result?.titleWarnings?.length) return "";
+	const titles = result.titleWarnings;
+	const report = titles.slice(0, 8).join("\n");
+	return "Check OCR in " + titles.length + " bookmark title(s).\n" + report;
+}
+
 function makeProgressWindow(window, message, title = "Lossless OCR") {
 	const id = "lossless-ocr-for-zotero-progress";
 	const xhtml = "http://www.w3.org/1999/xhtml";
@@ -202,6 +209,7 @@ LosslessOCRForZotero = {
 	async run(window) {
 		const progress = makeProgressWindow(window, "Checking tools");
 		const failures = [];
+		const titleWarnings = [];
 		let completed = 0;
 		let skipped = 0;
 		let bookmarksAdded = 0;
@@ -238,6 +246,8 @@ LosslessOCRForZotero = {
 					else completed++;
 					if (result.bookmarks?.status === "added") bookmarksAdded += result.bookmarks.count;
 					if (result.bookmarks?.status === "needs_review") bookmarksNeedReview++;
+					const warning = bookmarkTitleWarning(result.bookmarks);
+					if (warning) titleWarnings.push(job.pdfItem.getDisplayTitle() + "\n" + warning);
 					if (result.bookmarks?.status === "error") {
 						failures.push(job.pdfItem.getDisplayTitle() + " (bookmarks): " + result.bookmarks.error);
 					}
@@ -261,6 +271,7 @@ LosslessOCRForZotero = {
 				+ (bookmarksAdded ? ", " + bookmarksAdded + " bookmarks added" : "")
 				+ (bookmarksNeedReview ? ", " + bookmarksNeedReview + " outlines need review" : "")
 			);
+			if (titleWarnings.length) window.alert(titleWarnings.join("\n\n"));
 			if (failures.length) {
 				window.alert(
 					"Lossless OCR completed " + completed + " PDF(s), skipped "
@@ -353,17 +364,18 @@ LosslessOCRForZotero = {
 			const results = await this.bookmarkItems(selected, { apply: true, progress, window });
 			if (!results.length) return;
 			const added = results.filter(result => result.status === "added");
-			const issues = results.filter(result => !["added", "existing"].includes(result.status) || result.unresolved);
+			const issues = results.flatMap(result => {
+				const messages = [];
+				if (result.error) messages.push(result.error);
+				else if (result.unresolved) messages.push(result.unresolved + " contents entries could not be mapped to a page");
+				else if (result.status === "protected") messages.push("The PDF is encrypted or digitally signed");
+				else if (!["added", "existing"].includes(result.status)) messages.push("No bookmarks could be identified");
+				const warning = bookmarkTitleWarning(result);
+				if (warning) messages.push(warning);
+				return messages.length ? [result.title + "\n" + messages.join("\n")] : [];
+			});
 			progress.finish(added.length + " PDFs bookmarked, " + (results.length - added.length) + " unchanged");
-			if (issues.length) {
-				window.alert(issues.map(result => {
-					const detail = result.error || (result.unresolved
-						? result.unresolved + " contents entries could not be mapped to a page"
-						: result.status === "protected" ? "The PDF is encrypted or digitally signed"
-						: "No bookmarks could be identified");
-					return result.title + ": " + detail;
-				}).join("\n"));
-			}
+			if (issues.length) window.alert(issues.join("\n\n"));
 		}
 		catch (error) {
 			window.alert("PDF bookmarks could not start:\n\n" + error.message);

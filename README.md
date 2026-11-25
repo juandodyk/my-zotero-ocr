@@ -101,8 +101,11 @@ chapter starts. Papers use tagged headings or text layout. On image-only books
 the helper uses Tesseract on selected front-matter pages and likely chapter
 starts. If existing OCR garbles the contents, it checks the body headings and
 re-reads just the affected contents pages. It leaves an ambiguous book
-unchanged until its candidates are reviewed.
-The process is local and makes no model or network calls.
+unchanged until its candidates are reviewed. It can restore missing chapter
+numbers from the chapter opening or a consistent run of numbered sections.
+For scanned headings with suspicious mathematical notation, it compares small
+crops of the heading and flags conflicting readings. The process is local and
+makes no model or network calls.
 
 Enable **Add PDF bookmarks when running OCR** in the extension’s Zotero settings
 to generate them from the new text layer. A born-digital PDF can receive
@@ -121,7 +124,9 @@ python src/pdf_bookmarks.py book.pdf --choices choices.json --output book-bookma
 Preview returns candidate IDs, levels, and one-based PDF pages. A choices file
 is a JSON list such as `[{"id":1,"level":1},{"id":3,"level":2}]`. Choose
 candidates from a preview of the same PDF with the same OCR options. Candidates
-without resolved destinations cannot be selected.
+without resolved destinations cannot be selected. A reviewed choice can include
+a `"title"` field to correct a bookmark label before embedding it. Preview
+includes alternate OCR readings in `titleReview` when available.
 
 ## Preservation recipe
 
@@ -192,7 +197,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 ## Install
 
 Run `./build.sh`, then in Zotero open **Tools → Plugins**, choose **Install
-Plugin From File**, and select `build/lossless-ocr-for-zotero-1.9.2.xpi`.
+Plugin From File**, and select `build/lossless-ocr-for-zotero-1.9.3.xpi`.
 Published releases provide the same versioned XPI on GitHub.
 
 This is a full replacement for the earlier local “OCRmyPDF for Zotero”
