@@ -100,7 +100,10 @@ place. The attachment key and Zotero annotations are preserved. Bookmark
 generation during OCR keeps an existing outline.
 
 Books use their printed contents, internal links, page labels, and verified
-chapter starts. Papers use tagged headings or text layout. On image-only books
+chapter starts. Right-aligned links on printed page numbers help reconstruct
+split or wrapped contents rows even when the PDF's link targets are broken.
+When a PDF lacks page labels, consistent sequences of printed header and
+footer numbers can verify the mapping. Papers use tagged headings or text layout. On image-only books
 the helper uses Tesseract on selected front-matter pages and likely chapter
 starts. If existing OCR garbles the contents, it checks the body headings and
 re-reads just the affected contents pages. It leaves an ambiguous book
@@ -204,7 +207,7 @@ uncheck **Keep the pre-OCR PDF as a sibling attachment**.
 ## Install
 
 Run `./build.sh`, then in Zotero open **Tools → Plugins**, choose **Install
-Plugin From File**, and select `build/lossless-ocr-for-zotero-1.9.5.xpi`.
+Plugin From File**, and select `build/lossless-ocr-for-zotero-1.9.6.xpi`.
 Published releases provide the same versioned XPI on GitHub.
 
 This is a full replacement for the earlier local “OCRmyPDF for Zotero”

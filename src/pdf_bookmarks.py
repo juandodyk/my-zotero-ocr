@@ -50,7 +50,7 @@ SECTION = re.compile(
     r"results|findings|analysis|discussion|results and discussion|conclusions?|"
     r"discussion and conclusions?|limitations|future work|acknowledg[em]+nts?|"
     r"references|bibliography|appendix(?:\s+[\w]+)?|supplementary materials?|"
-    r"preface|foreword|index)$", re.I
+    r"preface|foreword|index|list of symbols)$", re.I
 )
 DATE = re.compile(r"^(?:[A-Za-z]+\s+)?\d{1,2},?\s+\d{4}$|^\d{4}[-/]\d{1,2}[-/]\d{1,2}$")
 CAPTION = re.compile(r"^(?:fig(?:ure)?\.?|table|equation|scheme|plate|algorithm|listing)\s+[\dA-Z]+\b", re.I)
@@ -247,9 +247,11 @@ def link_rows(page, resolver):
         dest = annotation.get("/Dest")
         if dest is None and action.get("/S") == pikepdf.Name.GoTo:
             dest = action.get("/D")
+        if dest is None:
+            continue
         target, destination = resolver.resolve(dest)
         rect = annotation.get("/Rect", [])
-        if target is not None and len(rect) == 4:
+        if len(rect) == 4:
             left, top = transform(float(rect[0]), float(rect[1]))
             right, bottom = transform(float(rect[2]), float(rect[3]))
             result.append((min(left, right), max(left, right), min(top, bottom), max(top, bottom), target, destination))
@@ -334,7 +336,7 @@ def contents_rows(lines, links, explicit):
         midpoint = line.y + .006
         linked = [(target, dest) for left, right, top, bottom, target, dest in links
                   if top - .012 <= midpoint <= bottom + .008 and left < line.x + line.width
-                  and right >= line.x - .008 and target != line.page]
+                  and right >= line.x - .008 and target is not None and target != line.page]
         if len({target for target, _ in linked}) == 1:
             target, dest = linked[0]
         else:
@@ -355,6 +357,60 @@ def contents_rows(lines, links, explicit):
             ) or folio is None and target is None)]
 
 
+def join_contents_title(fragments):
+    baselines = []
+    for line in sorted(fragments, key=lambda line: line.y + line.height):
+        if not baselines or line.y + line.height - baselines[-1][0] > .009:
+            baselines.append((line.y + line.height, []))
+        baselines[-1][1].append(line)
+    title_lines = []
+    for _, group in baselines:
+        words = []
+        right = None
+        for line in sorted(group, key=lambda line: line.x):
+            if right is not None and line.x - right > .0035:
+                words.append(" ")
+            words.append(line.text)
+            right = line.x + line.width
+        title_lines.append("".join(words))
+    return clean(" ".join(title_lines))
+
+
+def linked_folio_rows(lines, links):
+    # Some publishers link just the printed folio. The small right-aligned
+    # rectangles delimit entries, including wrapped titles and split digits.
+    if len(links) < 3 or any(right < .6 or right - left > .10
+                             for left, right, *_ in links):
+        return []
+    if max(right for _, right, *_ in links) - min(right for _, right, *_ in links) > .025:
+        return []
+    rows = []
+    previous_bottom = None
+    for left, right, top, bottom, target, dest in sorted(links, key=lambda link: link[2]):
+        if previous_bottom is not None and top < previous_bottom:
+            return []
+        in_band = [line for line in lines if top - .004 <= line.y + line.height / 2 <= bottom + .003]
+        digits = sorted((line for line in in_band
+                         if left - .006 <= line.x + line.width / 2 <= right + .006), key=lambda line: line.x)
+        folio = "".join(line.text for line in digits).lower()
+        title_fragments = [line for line in lines if line.x + line.width / 2 < left - .006
+                           and max(top - .037, previous_bottom or 0) < line.y + line.height / 2 < bottom + .003]
+        previous_bottom = bottom
+        if not title_fragments or not read_folio(folio):
+            return []
+        rightmost = max(title_fragments, key=lambda line: line.x)
+        if rightmost.text.casefold() == "page" and left - .10 < rightmost.x:
+            title_fragments.remove(rightmost)
+        title = join_contents_title(title_fragments)
+        if not any(char.isalpha() for char in title) or len(title) > 220:
+            return []
+        first = min(title_fragments, key=lambda line: (line.y + line.height, line.x))
+        start = min(line.x for line in title_fragments)
+        row = replace(first, text=title, x=start, width=right - start)
+        rows.append((row, title, folio, target, dest, False))
+    return rows
+
+
 def read_contents(pages, pdf, resolver):
     collected = []
     started = False
@@ -364,7 +420,8 @@ def read_contents(pages, pdf, resolver):
             parsed = [toc_folio(line.text) for line in lines]
             if sum(bool(folio and leaders) for _, folio, leaders in parsed) < 3:
                 continue
-        rows = contents_rows(lines, link_rows(pdf.pages[index], resolver), explicit)
+        links = link_rows(pdf.pages[index], resolver)
+        rows = linked_folio_rows(lines, links) or contents_rows(lines, links, explicit)
         destinations = sum(folio is not None or target is not None for _, _, folio, target, _, _ in rows)
         minimum = 1 if explicit or started and any(target is not None for _, _, _, target, _, _ in rows) else 2
         if destinations >= (minimum if explicit or started else 3):
@@ -669,6 +726,35 @@ def review_math_titles(entries, rows, pages, pdf, path, args):
 
 
 
+def printed_folio_pages(pages, excluded):
+    """Derive printed page numbers from consistent runs of header/footer folios."""
+    offsets = defaultdict(set)
+    for page, lines in pages.items():
+        if page in excluded:
+            continue
+        for line in lines:
+            if .028 < line.y < .095 or .92 < line.y < .975:
+                folio = read_folio(line.text)
+                if folio and folio[1] > 0:
+                    offsets[folio[0], page + 1 - folio[1]].add(page)
+
+    result = defaultdict(list)
+    for (kind, delta), indices in offsets.items():
+        runs = []
+        for page in sorted(indices):
+            if not runs or page - runs[-1][-1] > 3:
+                runs.append([])
+            runs[-1].append(page)
+        for run in runs:
+            span = run[-1] - run[0] + 1
+            if len(run) < 3 or len(run) < .75 * span:
+                continue
+            for page in range(run[0], run[-1] + 1):
+                if page not in excluded:
+                    result[kind, page + 1 - delta].append(page)
+    return result
+
+
 def resolve_contents(rows, pages, pdf, *, alternatives=False):
     entries = [entry for entry, _ in rows]
     excluded = {index for _, index in rows}
@@ -678,6 +764,7 @@ def resolve_contents(rows, pages, pdf, *, alternatives=False):
         for index, page in enumerate(pdf.pages):
             labels[page.label.casefold()].append(index)
 
+    printed = printed_folio_pages(pages, excluded) if not labels else {}
     hits = [book_heading_hits(matches.get(title_key(entry.title), [])) for entry in entries]
     resolved = []
     previous = -1
@@ -687,6 +774,8 @@ def resolve_contents(rows, pages, pdf, *, alternatives=False):
             previous = entry.page
             continue
         labeled = [index for index in labels.get(entry.folio, []) if index not in excluded]
+        if not labeled and entry.folio:
+            labeled = printed.get(read_folio(entry.folio), [])
         forward = [index for index in candidates if index >= previous]
         if len(labeled) == 1 and labeled[0] >= previous:
             page = labeled[0]

@@ -168,6 +168,49 @@ class BookmarksTests(unittest.TestCase):
         self.assertEqual(self.outline()[1][0], "1.1 Tributaries (reviewed)")
         self.assertEqual(self.outline()[2][0], "The River")
 
+    def test_broken_folio_links_anchor_split_and_wrapped_contents_rows(self):
+        c = canvas.Canvas(str(self.source), pagesize=(432, 648))
+        c.setFont("Helvetica-Bold", 20)
+        c.drawString(150, 570, "Contents")
+        c.setFont("Helvetica", 10)
+
+        def linked_folio(y, number):
+            c.drawString(349, y, number[0])
+            c.drawString(354.55, y, number[1])
+            c.linkRect("", "body", (348, y - 3, 361, y + 10), relative=0)
+
+        c.drawString(49, 500, "1")
+        c.drawString(73, 500, "The coast")
+        linked_folio(500, "25")
+        c.drawString(49, 480, "1.1")
+        c.drawString(73, 480, "The geometry of a long")
+        c.drawString(73, 467, "shoreline beside")
+        c.drawString(149, 467, "GL")
+        c.drawString(162, 467, "(n)")
+        linked_folio(467, "26")
+        c.drawString(49, 445, "1.2")
+        c.drawString(73, 445, "The headlands")
+        linked_folio(445, "28")
+        c.showPage()
+        c.bookmarkPage("body")
+        for number in range(25, 29):
+            c.setFont("Helvetica", 10)
+            c.drawRightString(360, 609, str(number))
+            c.drawString(66, 520, "The body has no searchable chapter titles here.")
+            c.showPage()
+        c.save()
+        with pikepdf.Pdf.open(self.source, allow_overwriting_input=True) as pdf:
+            for link in pdf.pages[0].obj.Annots:
+                link.Dest[0] = None
+            pdf.save(self.source)
+        result = self.run_helper("--output", self.output)
+        self.assertEqual((result["status"], result["count"], result["unresolved"]), ("added", 3, 0))
+        self.assertEqual([item[:3] for item in self.outline()], [
+            ("1 The coast", 2, 1),
+            ("1.1 The geometry of a long shoreline beside GL(n)", 3, 2),
+            ("1.2 The headlands", 5, 2),
+        ])
+
     def test_unlinked_printed_contents_uses_chapter_starts(self):
         self.make_book()
         result = self.run_helper("--output", self.output)

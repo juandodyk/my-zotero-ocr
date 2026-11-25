@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Lossless OCR for Zotero",
-  "version": "1.9.5",
+  "version": "1.9.6",
   "description": "Replace stale OCR and remove detected watermarks, and add bookmarks to Zotero PDFs.",
   "author": "Juan Dodyk",
   "homepage_url": "https://github.com/juandodyk/my-zotero-ocr",
