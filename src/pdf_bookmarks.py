@@ -33,6 +33,8 @@ VOLUME_CONTENTS = re.compile(r"^contents (?:for|of) volume (?:[ivxlcdm]+|\d+)$",
 ROMAN = re.compile(r"(?=[mdclxvi]+$)m{0,3}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})", re.I)
 FOLIO = re.compile(r"^(.+?)((?:[.·]{2,}|…)\s*|\s+)(\d{1,5}|[ivxlcdm]{1,12})$", re.I)
 NUMBERED = re.compile(r"^(\d{1,3}(?:\.\d{1,3})*)(?:[.)])?\s+(?=\S)")
+APPENDIX_NUMBERED = re.compile(r"^([A-Z](?:\.\d{1,3})*)\.\s+(?=\S)")
+HEADING_LABEL = re.compile(r"(?:\d{1,3}|[A-Z])(?:\.\d{1,3})*[.)]")
 TOC_NUMBERED = re.compile(r"^((?:\d{1,3}|[A-Z])(?:\.\d{1,3})+)(?:[.)])?\s+(?=\S)")
 CHAPTER_NUMBER = re.compile(r"^\d{1,3}[.)]?(?:\s|$)")
 PRINTED_CHAPTER = re.compile(r"^(?:chapter\s+)?(\d{1,3})[.)]?(?:\s|$)", re.I)
@@ -50,7 +52,7 @@ SECTION = re.compile(
     r"research design|(?:materials and )?methods?|methodology|data(?: and methods)?|"
     r"results|findings|analysis|discussion|results and discussion|conclusions?|"
     r"discussion and conclusions?|limitations|future work|acknowledg[em]+nts?|"
-    r"references|bibliography|appendix(?:\s+[\w]+)?|supplementary materials?|"
+    r"references|bibliography|appendix(?:\s+[\w]+)?|supplementary (?:materials?|data)|"
     r"preface(?: to the exercises)?|foreword|(?:symbols )?index|list of symbols|"
     r"solutions to selected exercises)$", re.I
 )
@@ -68,6 +70,8 @@ class Line:
     size: float
     bold: bool = False
     height: float = 0
+    italic: bool = False
+    partial_bold_prefix: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,9 +123,16 @@ def read_layout(path, first, last, tool):
             if not title:
                 continue
             x, y, width, height = (float(item.attrib[key]) for key in ("left", "top", "width", "height"))
+            bold = item.find(".//b") is not None
+            partial_bold_prefix = None
+            if bold:
+                first = item[0]
+                prefix = clean("".join(first.itertext())) if first.tag == "b" and not clean(item.text or "") else ""
+                if prefix != title:
+                    partial_bold_prefix = prefix
             lines.append(Line(page_index, title, x / w, y / h, width / w,
-                              sizes.get(item.attrib["font"], height),
-                              item.find(".//b") is not None, height / h))
+                              sizes.get(item.attrib["font"], height), bold, height / h,
+                              item.find(".//i") is not None, partial_bold_prefix))
         pages[page_index] = lines
     return pages
 
@@ -999,6 +1010,47 @@ def tagged_headings(path, pages, tool):
     return result
 
 
+def split_heading(group, index):
+    """Reassemble a section label and its typographically marked title."""
+    label = group[index]
+    if not HEADING_LABEL.fullmatch(label.text):
+        return label, index
+    if index + 1 == len(group):
+        return label, index
+    first = group[index + 1]
+    gap = first.x - label.x - label.width
+    if (abs(first.y - label.y) > .004 or not 0 <= gap <= .045
+            or not (first.bold or first.italic)):
+        return label, index
+    if first.partial_bold_prefix is not None:
+        title = first.partial_bold_prefix
+        if label.bold and title.endswith((".", "?", "!")):
+            return replace(label, text=f"{label.text} {title}", bold=True), index + 1
+        return label, index
+    title = first.text
+    end = index + 1
+    for fragment in group[index + 2:]:
+        last = group[end]
+        gap = fragment.x - last.x - last.width
+        if abs(fragment.y - label.y) > .004 or not -.004 <= gap <= .012:
+            break
+        if (fragment.bold, fragment.italic) != (first.bold, first.italic) and (
+            len(fragment.text) > 2 or last.text.endswith((".", "?", "!"))
+        ):
+            break
+        word_gap = gap > .0035 and not (fragment.text == "(" and len(last.text) == 1)
+        styled_word_boundary = (gap > .001 and last.bold and not fragment.bold
+                                and last.text[-1].isalpha() and fragment.text[0].isalpha())
+        title += (" " if word_gap or styled_word_boundary else "") + fragment.text
+        end += 1
+    inline = end + 1 < len(group) and abs(group[end + 1].y - label.y) <= .004
+    if inline and not (label.bold and first.bold and title.endswith((".", "?", "!"))):
+        return label, index
+    last = group[end]
+    return replace(label, text=f"{label.text} {title}", bold=first.bold, italic=first.italic,
+                   width=last.x + last.width - label.x), end
+
+
 def layout_headings(pages):
     body_sizes = Counter()
     occurrence = defaultdict(set)
@@ -1011,20 +1063,30 @@ def layout_headings(pages):
             occurrence[normalized(line.text)].add(line.page)
     body = body_sizes.most_common(1)[0][0] if body_sizes else 0
     headings = []
+    preceding_number = ""
+    inside_appendix = False
     for page, group in pages.items():
         skip_through = -1
-        for index, line in enumerate(group):
-            if index <= skip_through or not .045 <= line.y <= .94 or not 3 <= len(line.text) <= 140:
+        for index, original in enumerate(group):
+            if index <= skip_through or not .045 <= original.y <= .94:
+                continue
+            line, end = split_heading(group, index)
+            if not 3 <= len(line.text) <= 140:
                 continue
             number = NUMBERED.match(line.text)
+            if number is None and inside_appendix:
+                number = APPENDIX_NUMBERED.match(line.text)
+            if end > index and number is None:
+                continue
             title = line.text[number.end():] if number else line.text
-            known = SECTION.fullmatch(title) is not None
+            appendix_group = title.casefold() in {"appendix", "appendices"}
+            known = appendix_group or SECTION.fullmatch(title) is not None
             unit = BOOK_UNIT.match(title)
             large = bool(body and line.size >= body * 1.16)
-            strong = large or line.bold
+            strong = large or line.bold and line.partial_bold_prefix is None
             if (len(normalized(title)) < 3 or CAPTION.match(title) or CONTENTS.fullmatch(title)
                     or DATE.fullmatch(title) or re.search(r"[@]|https?://|[;,]$", title)
-                    or len(occurrence[normalized(line.text)]) > 1 and not (known and strong)):
+                    or len(occurrence.get(normalized(line.text), ())) > 1 and not (known and strong)):
                 continue
             centered = abs(line.x + line.width / 2 - .5) < .05
             if not (known or number or unit) and (
@@ -1032,15 +1094,32 @@ def layout_headings(pages):
             ):
                 continue
             previous = group[index - 1] if index else None
-            following = group[index + 1] if index + 1 < len(group) else None
+            following = group[end + 1] if end + 1 < len(group) else None
             separated = (previous is None or line.y - previous.y > .025) and (
                 following is None or following.y - line.y > .022)
             if number:
-                root = int(number[1].split(".")[0])
-                if not 0 < root < 100 or len(title) >= 105 or not title[0].isupper():
+                label = number[1]
+                root = label.split(".")[0]
+                if (root.isdecimal() and not 0 < int(root) < 100
+                        or len(title) >= 105 or not title[0].isupper()):
                     continue
-                if strong or known or separated and len(title) <= 65:
-                    headings.append((line, line.text, strong or known, number[1]))
+                parent = label.rpartition(".")[0]
+                recovered = end > index
+                if (recovered or root.isalpha()) and parent and not (
+                    preceding_number == parent or preceding_number.startswith(parent + ".")
+                ):
+                    continue
+                gap = max(.016, line.height + .005)
+                centered_section = (not parent and centered and title.isupper()
+                                    and (previous is None or line.y - previous.y > gap)
+                                    and (following is None or following.y - line.y > gap))
+                styled = recovered and (line.bold or line.italic)
+                suggested = strong or known or centered_section or styled
+                if suggested or separated and len(title) <= 65:
+                    headings.append((line, line.text, suggested, label))
+                    skip_through = end
+                    if suggested:
+                        preceding_number = label
                 continue
             # Join a prominent centered heading wrapped across two lines.
             if (large and centered and following and body and line.size >= body * 1.45
@@ -1052,6 +1131,9 @@ def layout_headings(pages):
                 skip_through = index + 1
             elif known or unit and strong or strong and separated and len(title) <= 95:
                 headings.append((line, line.text, True, None))
+            if known:
+                inside_appendix = appendix_group
+                preceding_number = ""
     enough_headings = sum(suggested for _, _, suggested, _ in headings) >= 2
     size_counts = Counter(round(line.size) for line, _, yes, number in headings
                           if yes and not number and body and line.size >= body * 1.16)
@@ -1063,7 +1145,7 @@ def layout_headings(pages):
         ranks = [size for size in ranks if size <= top]
     entries = []
     for line, title, suggested, number in headings:
-        level = number.count(".") + 1 if number else 1
+        level = number.count(".") + 1 + int(number[0].isalpha()) if number else 1
         if number is None and round(line.size) in ranks:
             level = min(3, 1 + ranks.index(round(line.size)))
         entries.append(Entry(title, level, line.page, line.y, suggested=suggested and enough_headings))

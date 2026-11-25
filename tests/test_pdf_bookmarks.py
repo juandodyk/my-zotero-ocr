@@ -467,6 +467,61 @@ class BookmarksTests(unittest.TestCase):
             ("Introduction", 1, 1), ("Conclusion", 2, 1)
         ])
 
+    def test_paper_body_size_sections_split_titles_and_run_in_appendix(self):
+        c = canvas.Canvas(str(self.source), pagesize=(600, 800))
+
+        def paragraph(y):
+            c.setFont("Times-Roman", 10)
+            c.drawString(100, y, "The researchers compiled a dataset from the observations made in the field.")
+            c.drawString(100, y - 12, "They documented how each of the variables was collected and measured.")
+
+        c.setFont("Times-Roman", 10)
+        c.drawCentredString(300, 700, "1. STUDY SETTING")
+        paragraph(684)
+        c.drawString(100, 640, "1.1.")
+        c.setFont("Times-Italic", 10)
+        c.drawString(125, 640, "Data sources")
+        paragraph(624)
+        c.setFont("Times-Bold", 10)
+        c.drawString(119, 575, "1.1.1.")
+        c.drawString(151, 575, "Survey design.")
+        c.setFont("Times-Roman", 10)
+        c.drawString(216, 575, "The sample includes three regions.")
+        paragraph(563)
+        c.drawString(100, 514, "1.")
+        c.setFont("Times-Bold", 10)
+        c.drawString(119, 514, "First item.")
+        c.setFont("Times-Roman", 10)
+        c.drawString(167, 514, "This numbered list is part of the body.")
+        c.drawCentredString(300, 466, "2. MODEL SPECIFICATION")
+        paragraph(450)
+        c.showPage()
+
+        c.setFont("Times-Roman", 10)
+        c.drawCentredString(300, 700, "APPENDIX")
+        c.drawString(100, 680, "A.")
+        c.setFont("Times-Italic", 10)
+        c.drawString(120, 680, "Additional data")
+        c.setFont("Times-Bold", 8)
+        c.drawString(119, 660, "A.1.")
+        c.drawString(141, 660, "Selection rule.")
+        c.setFont("Times-Roman", 8)
+        c.drawString(194, 660, "Only surveys with complete responses are included.")
+        paragraph(648)
+        c.setFont("Times-Bold", 8)
+        c.drawString(100, 596, "Supplementary Data")
+        paragraph(580)
+        c.save()
+
+        result = self.run_helper("--output", self.output)
+        self.assertEqual((result["method"], result["count"]), ("headings", 8))
+        self.assertEqual([entry[:3] for entry in self.outline()], [
+            ("1. STUDY SETTING", 1, 1), ("1.1. Data sources", 1, 2),
+            ("1.1.1. Survey design.", 1, 3), ("2. MODEL SPECIFICATION", 1, 1),
+            ("APPENDIX", 2, 1), ("A. Additional data", 2, 2),
+            ("A.1. Selection rule.", 2, 3), ("Supplementary Data", 2, 1)
+        ])
+
     def test_tagged_heading_uses_structure_at_body_font_size(self):
         c = canvas.Canvas(str(self.source))
         c.setFont("Helvetica", 11)
